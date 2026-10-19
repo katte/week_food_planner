@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Menù della settimana</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+  <script src="recipes.js" defer></script>
+  <script src="groceries.js" defer></script>
+  <script src="users.js" defer></script>
+</head>
+<body class="is-locked">
+  <header class="site-header">
+    <a class="brand" href="#/settimana">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="plate-rim" cx="32" cy="32" r="27"/>
+        <circle class="plate-well" cx="32" cy="32" r="18"/>
+        <circle class="plate-line" cx="32" cy="32" r="12"/>
+      </svg>
+      Menù della settimana
+    </a>
+    <nav class="site-nav" aria-label="Sezioni">
+      <a href="#/settimana" data-nav="settimana">Settimana</a>
+      <a href="#/piatti" data-nav="piatti">Piatti</a>
+      <a href="#/spesa" data-nav="spesa">Spesa</a>
+      <a href="#/storico" data-nav="storico">Storico</a>
+    </nav>
+    <div id="user-menu" class="user-menu" hidden>
+      <a id="user-name" class="user-name" href="#/utenti" data-nav="utenti" title="Utenti e password">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg>
+        <span class="user-name-text"></span>
+      </a>
+      <button type="button" class="btn btn-sm btn-ghost" id="logout-btn">Esci</button>
+    </div>
+  </header>
+
+  <main id="app" class="app" tabindex="-1">
+    <p class="loading">Caricamento…</p>
+  </main>
+
+  <dialog id="picker" class="picker" aria-labelledby="picker-title">
+    <header class="picker-head">
+      <div>
+        <p id="picker-kicker" class="picker-kicker"></p>
+        <h2 id="picker-title" class="picker-title"></h2>
+      </div>
+      <button type="button" class="icon-btn" data-action="picker-close" aria-label="Chiudi">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <input id="picker-search" class="input picker-search" type="search" autocomplete="off"
+           placeholder="Cerca tra i tuoi piatti o scrivine uno nuovo…" aria-label="Cerca un piatto">
+    <div id="picker-list" class="picker-list"></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

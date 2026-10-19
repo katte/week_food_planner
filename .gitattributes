@@ -1,0 +1,5 @@
+# Testo con fine riga normalizzato nel repository; gli script .bat restano CRLF per Windows.
+* text=auto
+*.bat text eol=crlf
+*.png binary
+*.jpg binary

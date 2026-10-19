@@ -1,0 +1,11 @@
+# config.php (credenziali del database) e users.php (utenti del login) non vanno
+# mai serviti al browser: essendo PHP non mostrerebbero nulla, ma meglio bloccarli del tutto.
+<FilesMatch "^(config|config\.example|users)\.php$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

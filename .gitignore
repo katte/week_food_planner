@@ -1,0 +1,17 @@
+# Credenziali del database e dell'FTP, vecchio file degli utenti, stato del deploy
+public/config.php
+public/users.php
+deploy_config.ini
+.deploy_state.json
+
+# Impostazioni locali degli strumenti di sviluppo
+.claude/
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+
+# File di sistema
+Thumbs.db
+desktop.ini
+.DS_Store

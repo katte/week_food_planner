@@ -1,0 +1,70 @@
+Ti allego una o più foto di scontrini della spesa. Leggile con attenzione e restituisci SOLO un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice.
+
+FORMATO (esempio con un solo scontrino)
+{
+  "versione": 2,
+  "scontrini": [
+    {
+      "negozio": "Esselunga",
+      "indirizzo": "Via Roma 1, Milano",
+      "data": "2026-10-17",
+      "ora": "18:42",
+      "totale": 45.67,
+      "righe": [
+        {
+          "descrizione": "SPAGH.BARILLA N5 500G",
+          "nome": "Spaghetti Barilla n.5",
+          "marca": "Barilla",
+          "categoria": "alimentari",
+          "quantita": 2,
+          "formato": { "valore": 500, "unita": "g", "stimato": false },
+          "peso_kg": null,
+          "prezzo_unitario": 1.29,
+          "prezzo_al_kg": null,
+          "prezzo_pieno": 2.58,
+          "sconto": 0.50,
+          "prezzo_pagato": 2.08,
+          "ingrediente": "pasta"
+        },
+        {
+          "descrizione": "ZUCCHINE",
+          "nome": "Zucchine",
+          "marca": null,
+          "categoria": "alimentari",
+          "quantita": 1,
+          "formato": null,
+          "peso_kg": 0.456,
+          "prezzo_unitario": null,
+          "prezzo_al_kg": 2.99,
+          "prezzo_pieno": 1.36,
+          "sconto": 0,
+          "prezzo_pagato": 1.36,
+          "ingrediente": "zucchine"
+        }
+      ],
+      "sconti_non_assegnati": [ { "descrizione": "BUONO SCONTO", "importo": 3.00 } ],
+      "avvisi": []
+    }
+  ],
+  "avvisi": []
+}
+
+REGOLE
+1. Un elemento di "scontrini" per ogni scontrino diverso, nell'ordine delle foto. Più foto dello stesso scontrino (uno scontrino lungo fotografato a pezzi) formano un solo elemento: unisci le righe e non ripetere quelle che compaiono in due foto. Se una foto non è uno scontrino o è illeggibile, non inventare: spiegalo negli "avvisi" generali, quelli fuori da "scontrini".
+2. Una riga per ogni prodotto acquistato, nello stesso ordine dello scontrino. Includi anche i prodotti non alimentari (detersivi, igiene, sacchetti...).
+3. Non creare righe per: subtotale, totale, IVA, pagamento, contanti, resto, punti o saldo della carta fedeltà, numero dello scontrino.
+4. "descrizione": il testo della riga esattamente come stampato (stesse maiuscole, abbreviazioni e simboli), senza prezzo né quantità. Serve a riconoscere lo stesso prodotto negli scontrini successivi.
+5. "nome": nome leggibile e completo del prodotto (es. "Spaghetti Barilla n.5"), senza prezzo né peso. "marca": la marca se riconoscibile, altrimenti null.
+6. "categoria": una tra "alimentari", "bevande", "casa", "igiene", "animali", "altro".
+7. Quantità e prezzi:
+   - "quantita": numero di pezzi acquistati (1 se non indicato; per righe come "2 x 1,29" vale 2).
+   - "prezzo_unitario": prezzo di un pezzo, se stampato; altrimenti null.
+   - "prezzo_pieno": importo della riga prima di qualsiasi sconto.
+   - Prodotti pesati (es. "0,456 kg x 2,99 €/kg"): "peso_kg": 0.456, "prezzo_al_kg": 2.99, "quantita": 1, "formato": null. Se è stampato il prezzo al kg ma non il peso, indica solo "prezzo_al_kg" e lascia "peso_kg": null.
+8. Sconti: le righe di sconto che si riferiscono a un prodotto (SCONTO, OFFERTA, PROMO, 3x2, un importo negativo subito sotto il prodotto...) NON sono righe a sé. Metti l'importo in "sconto" del prodotto a cui si riferiscono (come numero positivo) e calcola "prezzo_pagato" = "prezzo_pieno" - "sconto". Senza sconto: "sconto": 0 e "prezzo_pagato" uguale a "prezzo_pieno". Gli sconti sull'intero scontrino (buoni, coupon, sconti fedeltà sul totale) vanno in "sconti_non_assegnati".
+9. "formato": peso o volume di UNA confezione, quando è scritto nella descrizione: 500G → { "valore": 500, "unita": "g" }; 1L → { "valore": 1, "unita": "l" }; 6X125G (una confezione da 6) → { "valore": 750, "unita": "g" }; UOVA X6 → { "valore": 6, "unita": "pz" }. Unità ammesse: "g", "kg", "ml", "l", "pz". Se non è scritto ma conosci con sicurezza il formato standard di quel prodotto, indicalo con "stimato": true; altrimenti "formato": null. Non inventare.
+10. "ingrediente": l'ingrediente generico che il prodotto rappresenta in cucina. Se corrisponde a uno di questi ingredienti già esistenti, usa esattamente quel nome:
+{{INGREDIENTI}}
+   Altrimenti proponi un nome generico breve, come lo scriveresti in una ricetta (es. "pasta", "pomodori pelati", "mozzarella", "latte", "zucchine"), e usa lo stesso nome per lo stesso ingrediente in tutti gli scontrini. Per i prodotti non alimentari usa null.
+11. Numeri con il punto decimale e senza simbolo di valuta. "data" nel formato AAAA-MM-GG, "ora" nel formato HH:MM. Se un dato non è leggibile usa null e spiegalo negli "avvisi" di quello scontrino.
+12. Controllo finale, per ogni scontrino: la somma dei "prezzo_pagato" meno gli importi di "sconti_non_assegnati" deve essere uguale a "totale". Se non torna, ricontrolla lo scontrino; se ancora non torna, scrivi la differenza nei suoi "avvisi".
