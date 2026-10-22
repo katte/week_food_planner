@@ -522,7 +522,79 @@ select.input {
 
 .shopping-list { list-style: none; margin: 0; padding: 0; }
 
+/* Titolo del reparto: alto una riga, scritto sopra la riga del foglio. */
+.shop-group {
+  display: flex;
+  align-items: flex-end;
+  height: var(--line);
+  padding: 0 0 6px 2px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .shop-item { display: flex; align-items: center; gap: 4px; height: var(--line); }
+
+.shop-handle {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-3);
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.shop-handle .ico { width: 16px; height: 16px; stroke-width: 3; }
+.shop-item:hover .shop-handle,
+.shop-handle:focus-visible { opacity: 1; }
+
+.shop-item.is-dragging {
+  position: relative;
+  z-index: 1;
+  border-radius: 6px;
+  background: var(--paper-sunk);
+  box-shadow: var(--shadow);
+}
+
+.shop-item.is-dragging .shop-handle { opacity: 1; cursor: grabbing; }
+.shop-item.is-new { animation: shop-new 1.8s ease-out; }
+
+@keyframes shop-new {
+  from { background: var(--accent-soft); }
+  to { background: transparent; }
+}
+
+/* Reparti vuoti, mostrati solo mentre si trascina una voce. */
+.shopping-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.shopping-drop[hidden] { display: none; }
+.shop-drop-label { color: var(--ink-3); }
+
+.shop-drop-target {
+  padding: 4px 10px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 999px;
+  color: var(--ink-2);
+}
+
+.shop-drop-target.is-over { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); }
 
 .shop-item label {
   flex: 1;
@@ -565,7 +637,8 @@ select.input {
 .shop-remove:hover { color: var(--accent); }
 
 @media (hover: none) {
-  .shop-remove { opacity: 0.6; }
+  .shop-remove,
+  .shop-handle { opacity: 0.6; }
 }
 
 .shopping-add { display: flex; align-items: center; gap: 4px; height: var(--line); }
@@ -574,7 +647,7 @@ select.input {
   flex: 1;
   min-width: 0;
   height: calc(var(--line) - 2px);
-  padding: 0 2px 0 24px;
+  padding: 0 2px 0 46px; /* allineato al testo delle voci, dopo maniglia e casella */
   border: 0;
   background: transparent;
 }
@@ -1593,17 +1666,22 @@ ul.notice { padding-left: 32px; }
   .add-btn,
   .chip-remove,
   .shop-remove,
+  .shop-handle,
   .shopping-add,
+  .shopping-drop,
   .hint,
   .week-start,
   .today-badge,
   .toast { display: none !important; }
 
   .app { max-width: none; padding: 0; }
-  .week-toolbar { margin: 0 0 8px; }
+  .week-toolbar { margin: 0 0 6px; }
 
+  /* Tutto in un foglio (190 mm utili): titolo e tre righe di altezza fissa, che la
+     lista della spesa non può allungare. */
   .board {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 0.8fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.15fr);
+    grid-template-rows: repeat(3, 54mm);
     grid-template-areas:
       "d1 d2 d3 shop"
       "d4 d5 d6 shop"
@@ -1611,7 +1689,18 @@ ul.notice { padding-left: 32px; }
     break-inside: avoid;
   }
 
-  .day { min-height: 0; height: 58mm; }
+  .day { min-height: 0; }
   .chip { padding: 0; border: 0; min-height: 0; font-size: 13px; }
   .chip-name::before { content: "• "; }
+
+  /* Lista della spesa: righe più basse e, se non basta una colonna, la seconda. */
+  .shopping-cell { overflow: hidden; }
+  .shopping-cell > .cell-head:last-child { display: none; }
+  .shopping-body { min-height: 0; background: none; } /* niente righe: le voci qui sono più fitte */
+  .shopping-list { height: 145mm; column-width: 30mm; column-gap: 5mm; column-fill: auto; }
+  .shop-group { height: auto; padding: 1.5mm 0 0.5mm; font-size: 7pt; break-after: avoid; }
+  .shop-item { height: auto; min-height: 5mm; align-items: flex-start; gap: 1.5mm; font-size: 9.5pt; break-inside: avoid; }
+  .shop-item label { align-items: flex-start; gap: 1.5mm; }
+  .shop-item input { width: 3mm; height: 3mm; margin-top: 0.6mm; }
+  .shop-item span { overflow: visible; white-space: normal; }
 }

@@ -139,6 +139,7 @@ function migrateSchema(): void
         [$t['receipt_items'], 'package_from_product', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER package_estimated'],
         [$t['products'], 'price_per_kg', 'DECIMAL(10,3) NULL AFTER package_unit'],
         [$t['receipt_items'], 'weight_from_product', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER weight_kg'],
+        [$t['shopping'], 'category', 'VARCHAR(20) NULL AFTER text'],
     ];
     foreach ($columns as [$table, $column, $definition]) {
         if (!db()->query("SHOW COLUMNS FROM $table LIKE '$column'")->fetchAll()) {

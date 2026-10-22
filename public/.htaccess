@@ -1,5 +1,14 @@
 # config.php (credenziali del database) e users.php (utenti del login) non vanno
 # mai serviti al browser: essendo PHP non mostrerebbero nulla, ma meglio bloccarli del tutto.
+# Pagine, script e stili cambiano a ogni aggiornamento del sito: il browser deve sempre
+# chiedere se sono cambiati (se no riceve un 304, senza riscaricarli). Senza questa regola
+# può usare per ore una copia vecchia di un file insieme a quella nuova di un altro.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|js|css|txt)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
+
 <FilesMatch "^(config|config\.example|users)\.php$">
   <IfModule mod_authz_core.c>
     Require all denied

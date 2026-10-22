@@ -2,8 +2,9 @@
 
 /*
  * Menù della settimana — app a pagina singola, senza framework.
- * Viste: #/settimana[/AAAA-MM-GG] · #/piatti · #/storico; recipes.js aggiunge le ricette
- * ai piatti e groceries.js la sezione #/spesa, registrandosi in routes, actions e *Handlers.
+ * Viste: #/settimana[/AAAA-MM-GG] · #/piatti · #/storico; shopping.js gestisce la lista della
+ * spesa, recipes.js aggiunge le ricette ai piatti, groceries.js la sezione #/spesa e users.js la
+ * pagina #/utenti, registrandosi in routes, actions e *Handlers.
  */
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ const ICONS = {
   close: svg('M6 6l12 12M18 6L6 18'),
   print: svg('M7 9V3h10v6M7 17H4v-6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6h-3M7 14h10v7H7z'),
   warn: svg('M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01'),
+  grip: svg('M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01'),
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +58,7 @@ const state = {
   recipeDishId: null, // piatto con la ricetta aperta in «I miei piatti»
   recipeDraft: null, // ricetta in modifica: { servings, lines }
   week: null, // settimana aperta: { key, meals, notes, shopping }
+  shoppingTerms: {}, // reparti imparati per le voci della spesa (shopping.js)
   weekStartDay: 0, // giorno in cui iniziano le settimane: 0 = lunedì ... 6 = domenica
   editingDishId: null,
   dishFilter: { q: '', category: 'all' },
@@ -363,6 +366,7 @@ async function showWeek(match, token) {
 
   state.dishes = dishes;
   state.week = { key, meals: data.meals, notes: data.notes, shopping: data.shopping };
+  state.shoppingTerms = data.shoppingTerms ?? {};
   app.innerHTML = weekTemplate(state.week);
   renderSlots();
   renderShopping();
@@ -404,11 +408,12 @@ function weekTemplate(week) {
           <span id="shopping-count" class="muted"></span>
         </div>
         <div class="shopping-body lined">
-          <ul id="shopping-list" class="shopping-list"></ul>
-          <form id="shopping-form" class="shopping-add" autocomplete="off">
+          <form class="shopping-add" data-submit="shop-add" autocomplete="off">
             <input name="text" maxlength="200" placeholder="Aggiungi alla lista…" aria-label="Aggiungi alla lista della spesa">
             <button type="submit" aria-label="Aggiungi">${ICONS.plus}</button>
           </form>
+          <ul id="shopping-list" class="shopping-list"></ul>
+          <div id="shopping-drop" class="shopping-drop" hidden></div>
         </div>
         <div class="cell-head">
           <span></span>
@@ -461,25 +466,7 @@ function renderSlots() {
   }
 }
 
-function renderShopping() {
-  const list = document.getElementById('shopping-list');
-  if (!list) return;
-  list.innerHTML = state.week.shopping
-    .map((item, i) => `
-      <li class="shop-item${item.done ? ' is-done' : ''}" title="${esc(item.text)}">
-        <label><input type="checkbox" data-shop-index="${i}"${item.done ? ' checked' : ''}><span>${esc(item.text)}</span></label>
-        <button type="button" class="shop-remove" data-action="shop-remove" data-index="${i}" aria-label="Rimuovi ${esc(item.text)}">${ICONS.close}</button>
-      </li>`)
-    .join('');
-  updateShoppingMeta();
-}
-
-function updateShoppingMeta() {
-  const items = state.week.shopping;
-  const done = items.filter((item) => item.done).length;
-  document.getElementById('shopping-count').textContent = items.length ? `${done}/${items.length}` : '';
-  document.getElementById('shopping-clear').hidden = done === 0;
-}
+// La lista della spesa (renderShopping e i suoi eventi) sta in shopping.js.
 
 // --- Salvataggio automatico ------------------------------------------------
 
@@ -1011,16 +998,6 @@ const actions = {
     renderSlots();
     scheduleSave();
   },
-  'shop-remove': (el) => {
-    state.week.shopping.splice(Number(el.dataset.index), 1);
-    renderShopping();
-    scheduleSave();
-  },
-  'shop-clear': () => {
-    state.week.shopping = state.week.shopping.filter((item) => !item.done);
-    renderShopping();
-    scheduleSave();
-  },
   print: () => window.print(),
   'dish-filter': (el) => {
     state.dishFilter.category = el.dataset.category;
@@ -1081,14 +1058,6 @@ app.addEventListener('submit', (e) => {
   e.preventDefault();
   if (form.id === 'login-form') {
     submitLogin(form);
-  } else if (form.id === 'shopping-form') {
-    const input = form.elements.text;
-    const text = input.value.trim();
-    if (!text) return;
-    state.week.shopping.push({ id: uid(), text, done: false });
-    input.value = '';
-    renderShopping();
-    scheduleSave();
   } else if (form.id === 'dish-form') {
     addDish(form);
   } else if (form.classList.contains('dish-edit-form')) {
@@ -1116,16 +1085,7 @@ app.addEventListener('input', (e) => {
 
 app.addEventListener('change', (e) => {
   const el = e.target;
-  if (changeHandlers[el.dataset.change]) {
-    changeHandlers[el.dataset.change](el, e);
-    return;
-  }
-  if (el.dataset.shopIndex === undefined) return;
-  const item = state.week.shopping[Number(el.dataset.shopIndex)];
-  item.done = el.checked;
-  el.closest('.shop-item').classList.toggle('is-done', item.done);
-  updateShoppingMeta();
-  scheduleSave();
+  if (changeHandlers[el.dataset.change]) changeHandlers[el.dataset.change](el, e);
 });
 
 app.addEventListener('keydown', (e) => {

@@ -7,6 +7,7 @@ PHP + MySQL sul server, JavaScript senza framework né build nel browser: gira s
 ## Funzioni
 
 - **Settimana**: tabellone con pranzo e cena dei 7 giorni, note e lista della spesa, stampabile in A4. Il giorno di inizio è configurabile (es. sabato, se fai la spesa il sabato).
+- **Lista della spesa**: un solo campo per aggiungere; ogni voce va da sola nel suo reparto (frutta, verdura, carne…) grazie a un dizionario di parole comuni. Le voci si riordinano trascinandole; spostandone una in un altro reparto, il sito lo ricorda per le volte successive.
 - **Piatti**: i piatti che sai fare, con ricetta, porzioni e costo totale e a porzione. Un avviso segnala gli ingredienti che non hanno ancora un prezzo.
 - **Spesa**: scontrini letti da un'AI (foto → JSON con il prompt incluso), articoli con lo storico dei prezzi al kg, al litro o al pezzo, ingredienti collegati alle ricette.
 - **Storico**: le settimane passate, con ricerca per piatto.
@@ -41,6 +42,7 @@ Il costo di un piatto usa, per ogni ingrediente, il prezzo pieno dell'ultimo acq
 public/                 il sito da pubblicare
   index.html, styles.css
   app.js                settimana, piatti, storico, accesso
+  shopping.js           lista della spesa: reparti, dizionario, riordino
   recipes.js            ricette e costi
   groceries.js          scontrini, articoli, ingredienti
   users.js              utenti

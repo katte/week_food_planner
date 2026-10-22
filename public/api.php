@@ -25,6 +25,7 @@
  *   GET  api.php?action=weeks                      tutte le settimane salvate, dalla più recente
  *   GET  api.php?action=week&week=AAAA-MM-GG       la settimana che contiene quel giorno (chiave = suo primo giorno)
  *   POST api.php?action=week-save&week=AAAA-MM-GG  salva una settimana (indicata con il primo giorno) { meals, notes, shopping }
+ *   POST api.php?action=shopping-term              ricorda il reparto di una voce della spesa { term, category }
  *
  * Spesa e costi (codice in lib/groceries.php):
  *   GET  api.php?action=ingredients                ingredienti con l'ultimo prezzo
@@ -63,6 +64,11 @@ set_error_handler(function (int $severity, string $message, string $file, int $l
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DAY_NAMES = ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'];
 const MEALS = ['lunch', 'dinner'];
+// Reparti della lista della spesa (nomi, ordine e parole in shopping.js).
+const SHOPPING_CATEGORIES = [
+    'frutta', 'verdura', 'pane', 'carne', 'pesce', 'salumi', 'latticini', 'dispensa',
+    'colazione', 'surgelati', 'bevande', 'casa', 'igiene', 'animali', 'altro',
+];
 const CATEGORIES = ['primo', 'secondo', 'unico', 'contorno', 'altro'];
 const MAX_BODY = 1000000;
 
@@ -144,7 +150,7 @@ function tables(): array
             throw new HttpError(500, 'Il prefisso delle tabelle in config.php può contenere solo lettere, numeri e _');
         }
         $names = [
-            'dishes', 'weeks', 'meals', 'shopping', 'login_attempts', 'settings', 'users',
+            'dishes', 'weeks', 'meals', 'shopping', 'shopping_terms', 'login_attempts', 'settings', 'users',
             'ingredients', 'dish_ingredients', 'products', 'product_aliases', 'receipts', 'receipt_items',
         ];
         foreach ($names as $name) {
@@ -197,10 +203,17 @@ function createSchema(): void
             week_start DATE NOT NULL,
             position SMALLINT UNSIGNED NOT NULL,
             text VARCHAR(200) NOT NULL,
+            category VARCHAR(20) NULL COMMENT 'reparto (frutta, verdura...): vedi SHOPPING_CATEGORIES',
             done TINYINT(1) NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
             KEY idx_week (week_start, position),
             FOREIGN KEY (week_start) REFERENCES {$t['weeks']} (week_start) ON DELETE CASCADE
+        ) $options",
+        "CREATE TABLE IF NOT EXISTS {$t['shopping_terms']} (
+            term VARCHAR(80) NOT NULL COMMENT 'voce della lista ripulita (minuscolo, senza quantità)',
+            category VARCHAR(20) NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (term)
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['login_attempts']} (
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -754,12 +767,13 @@ function loadWeeks(?string $key = null): array
         ];
     }
 
-    $stmt = db()->prepare("SELECT id, week_start, text, done FROM {$t['shopping']} $filter ORDER BY week_start, position");
+    $stmt = db()->prepare("SELECT id, week_start, text, category, done FROM {$t['shopping']} $filter ORDER BY week_start, position");
     $stmt->execute($params);
     foreach ($stmt->fetchAll() as $row) {
         $weeks[$row['week_start']]['shopping'][] = [
             'id' => (string) $row['id'],
             'text' => $row['text'],
+            'category' => $row['category'],
             'done' => (bool) $row['done'],
         ];
     }
@@ -799,7 +813,12 @@ function normalizeWeek(array $input, array $dishNames): array
     foreach (is_array($input['shopping'] ?? null) ? $input['shopping'] : [] as $item) {
         $text = is_array($item) ? cleanLine($item['text'] ?? null, 200) : '';
         if ($text !== '') {
-            $shopping[] = ['text' => $text, 'done' => !empty($item['done'])];
+            $category = $item['category'] ?? null;
+            $shopping[] = [
+                'text' => $text,
+                'category' => in_array($category, SHOPPING_CATEGORIES, true) ? $category : null,
+                'done' => !empty($item['done']),
+            ];
         }
     }
 
@@ -859,10 +878,36 @@ function writeWeek(PDO $pdo, string $key, array $week): void
         }
     }
 
-    $insertItem = $pdo->prepare("INSERT INTO {$t['shopping']} (week_start, position, text, done) VALUES (?, ?, ?, ?)");
+    $insertItem = $pdo->prepare(
+        "INSERT INTO {$t['shopping']} (week_start, position, text, category, done) VALUES (?, ?, ?, ?, ?)"
+    );
     foreach ($week['shopping'] as $position => $item) {
-        $insertItem->execute([$key, $position, $item['text'], $item['done'] ? 1 : 0]);
+        $insertItem->execute([$key, $position, $item['text'], $item['category'] ?? null, $item['done'] ? 1 : 0]);
     }
+}
+
+// Reparti imparati per le voci della lista della spesa: [voce ripulita => reparto].
+function shoppingTerms(): object
+{
+    $t = tables();
+    return (object) db()->query("SELECT term, category FROM {$t['shopping_terms']}")->fetchAll(PDO::FETCH_KEY_PAIR);
+}
+
+// Ricorda il reparto scelto spostando una voce: la prossima volta finisce lì da sola.
+// { term: voce ripulita dal browser (minuscolo, senza quantità), category }
+function saveShoppingTerm(array $input): array
+{
+    $t = tables();
+    $term = cleanLine($input['term'] ?? null, 80);
+    $category = $input['category'] ?? null;
+    if ($term === '' || !in_array($category, SHOPPING_CATEGORIES, true)) {
+        throw new HttpError(400, 'Voce o reparto non validi');
+    }
+    db()->prepare(
+        "INSERT INTO {$t['shopping_terms']} (term, category, updated_at) VALUES (?, ?, UTC_TIMESTAMP())
+         ON DUPLICATE KEY UPDATE category = VALUES(category), updated_at = VALUES(updated_at)"
+    )->execute([strtolower($term), $category]);
+    return ['ok' => true];
 }
 
 // ---------------------------------------------------------------------------
@@ -981,7 +1026,10 @@ $routes = [
         return array_values(loadWeeks());
     }],
     'week' => ['GET', 200, function () {
-        return getWeek(weekParam()) + ['weekStartDay' => weekStartDay()];
+        return getWeek(weekParam()) + ['weekStartDay' => weekStartDay(), 'shoppingTerms' => shoppingTerms()];
+    }],
+    'shopping-term' => ['POST', 200, function () {
+        return saveShoppingTerm(readJson());
     }],
     'week-save' => ['POST', 200, function () {
         return saveWeek(weekParam(true), readJson());
