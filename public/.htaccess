@@ -1,5 +1,14 @@
-# config.php (credenziali del database) e users.php (utenti del login) non vanno
-# mai serviti al browser: essendo PHP non mostrerebbero nulla, ma meglio bloccarli del tutto.
+# Sempre in https: password e dati non viaggiano in chiaro, e le passkey funzionano solo così.
+# Il certificato è gestito da un proxy davanti al server: l'https si riconosce anche da
+# X-Forwarded-Proto o dalla variabile HTTPS, altrimenti il reindirizzamento non finirebbe mai.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{ENV:HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=302,L]
+</IfModule>
+
 # Pagine, script e stili cambiano a ogni aggiornamento del sito: il browser deve sempre
 # chiedere se sono cambiati (se no riceve un 304, senza riscaricarli). Senza questa regola
 # può usare per ore una copia vecchia di un file insieme a quella nuova di un altro.
@@ -9,6 +18,8 @@
   </FilesMatch>
 </IfModule>
 
+# config.php (credenziali del database) e il vecchio users.php non vanno mai serviti al
+# browser: essendo PHP non mostrerebbero nulla, ma meglio bloccarli del tutto.
 <FilesMatch "^(config|config\.example|users)\.php$">
   <IfModule mod_authz_core.c>
     Require all denied

@@ -283,7 +283,29 @@ select.input {
   margin: 6px 0 18px;
 }
 
-.week-title { min-width: 0; }
+.week-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.week-title > div { min-width: 0; }
+
+/* Il voto della pagella accanto al titolo: porta al dettaglio sotto il tabellone. */
+.week-grade {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  font: inherit;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  cursor: pointer;
+}
+
+.week-grade[hidden] { display: none; }
+.week-grade:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 .week-title h1 {
   margin: 0;
@@ -431,10 +453,22 @@ select.input {
   font-weight: 600;
   line-height: 1.25;
   cursor: grab;
+  -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none; /* tenendo premuto, niente menu di iOS */
 }
 
 .chip.is-dragging { opacity: 0.4; }
+
+/* Il piatto che segue il dito mentre lo si trascina. */
+.chip-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+}
 .chip-name { min-width: 0; overflow-wrap: anywhere; }
 
 .chip-remove {
@@ -684,9 +718,131 @@ select.input {
 
 .week-start .input { width: auto; height: 32px; padding: 0 28px 0 10px; font-size: 13px; }
 
+.hint-touch { display: none; }
+
 @media (hover: none) {
-  .hint-drag { display: none; }
+  .hint-mouse { display: none; }
+  .hint-touch { display: inline; }
 }
+
+/* ---------- Pagella della settimana e gruppi alimentari ---------- */
+
+.week-score {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 14px 18px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.week-score[hidden] { display: none; }
+
+/* Colori del voto come quelli, noti a tutti, delle etichette degli alimenti. */
+.score-grade {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+}
+
+.grade-a { background: #1e8f4e; }
+.grade-b { background: #7ac143; color: #1b3a10; }
+.grade-c { background: #f2c200; color: #3d3000; }
+.grade-d { background: #ee8100; }
+.grade-e { background: #e63e11; }
+
+.score-body { flex: 1; min-width: 0; }
+.score-title { margin: 0 0 8px; font-size: 15px; }
+.score-items { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+
+.score-item {
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.score-item:hover { border-color: var(--fg); }
+.score-item.is-off { border-color: transparent; background: var(--accent-soft); color: var(--accent); }
+.score-item[aria-expanded="true"] { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+.score-items b { color: var(--ink); }
+.score-items .is-off b { color: inherit; }
+.score-rule { opacity: 0.75; }
+.score-tip { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-3); }
+
+/* Pasti con il gruppo toccato: elenco nel riquadro e bordo del suo colore nel tabellone. */
+.score-detail { margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--fg); background: var(--paper-sunk); border-radius: 0 10px 10px 0; font-size: 13px; }
+.score-detail p { margin: 0; color: var(--ink-2); }
+.score-detail p + p, .score-meals + p { margin-top: 8px; }
+.score-meals { margin: 4px 0 0; padding: 0; list-style: none; }
+.score-meals li { padding: 2px 0; overflow-wrap: anywhere; }
+.score-when { color: var(--ink-3); }
+.score-when::after { content: " ·"; }
+.slot[data-fg] { box-shadow: inset 0 0 0 2px var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+
+.score-unknown { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0; font-size: 13px; color: var(--ink-2); }
+.score-unknown .ico { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--accent); }
+.score-how { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+.score-how summary { color: var(--ink-3); cursor: pointer; }
+.score-how p { margin: 6px 0 0; max-width: 80ch; }
+
+/* Ogni gruppo ha un pallino del suo colore. */
+.fg { --fg: var(--ink-3); }
+.fg-verdura, [data-fg="verdura"] { --fg: #4c9a4f; }
+.fg-pesce, [data-fg="pesce"] { --fg: #2f7fb8; }
+.fg-legumi, [data-fg="legumi"] { --fg: #a0702a; }
+.fg-carne_rossa, [data-fg="carne_rossa"] { --fg: #c0392b; }
+.fg-salumi, [data-fg="salumi"] { --fg: #d26a8c; }
+.fg-carne_bianca, [data-fg="carne_bianca"] { --fg: #d9a066; }
+.fg-uova, [data-fg="uova"] { --fg: #e0b400; }
+.fg-formaggi, [data-fg="formaggi"] { --fg: #c99a2e; }
+
+.fg::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--fg);
+  vertical-align: 1px;
+}
+
+.dish-groups { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; font-size: 12.5px; color: var(--ink-2); }
+
+.dish-groups-edit {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  min-width: 0;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.dish-groups-edit legend { float: left; margin-right: 4px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.fg-toggles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.fg-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.fg-toggle::before { display: none; }
+.fg-toggle input { margin: 0; accent-color: var(--fg); }
+.fg-toggle:has(input:disabled) { cursor: default; opacity: 0.75; }
+.card-ingredient-group { grid-column: 1 / -1; }
 
 /* ---------- Pagine (piatti, storico) ---------- */
 
@@ -875,6 +1031,7 @@ select.input {
 .history-title { font-size: 18px; font-weight: 700; color: var(--ink); text-decoration: none; }
 .history-title:hover { color: var(--accent); }
 .history-meta { font-size: 13px; color: var(--ink-3); }
+.week-grade.history-grade { width: 30px; height: 30px; border-radius: 9px; font-size: 18px; text-decoration: none; }
 .history-open { margin-left: auto; }
 
 .badge {
@@ -1088,6 +1245,11 @@ select.input {
 .user-form .btn { align-self: flex-start; }
 .user-form .muted { margin: 0; font-size: 13px; }
 
+.passkey-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
+.passkey-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.passkey-row > span { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.passkey-row small { font-size: 12px; }
+
 .check {
   display: flex;
   align-items: center;
@@ -1211,6 +1373,11 @@ ul.notice { padding-left: 32px; }
 }
 
 .recipe-servings { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+
+/* Gruppi alimentari della ricetta, per la pagella della settimana. */
+.recipe-groups { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: -2px 0 10px; font-size: 13px; color: var(--ink-2); }
+.recipe-group { margin-left: 8px; font-size: 12px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
+.recipe-group.is-off { opacity: 0.6; }
 .recipe-servings .input { width: 64px; height: 34px; padding: 0 6px; text-align: center; }
 .recipe-total { font-size: 14px; }
 
@@ -1250,8 +1417,94 @@ ul.notice { padding-left: 32px; }
 .recipe-add .input { height: 36px; }
 .recipe-add .btn { height: 36px; }
 
+/* Suggerimenti sotto il campo (o sopra, se sotto c'è la tastiera del telefono). */
+.suggest { position: relative; min-width: 0; }
+.suggest .input { width: 100%; }
+
+.suggest-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 290px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.suggest-list[hidden] { display: none; }
+.suggest-list.is-above { top: auto; bottom: calc(100% + 4px); }
+
+.suggest-list li {
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-size: 15px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.suggest-list li:hover,
+.suggest-list li.is-active { background: var(--accent-soft); }
+.suggest-list mark { background: none; color: inherit; font-weight: 700; }
+
 .recipe-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
 .recipe-link { margin-left: auto; font-size: 13px; font-weight: 600; }
+
+/* Da dove viene il prezzo della riga, e il nome che apre la scheda dell'ingrediente. */
+.recipe-hint.is-source { display: block; color: var(--ink-3); }
+.recipe-hint.is-source b { color: var(--ink-2); }
+
+.ingredient-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline dotted var(--ink-3);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.ingredient-link:hover { color: var(--accent); text-decoration-color: currentColor; }
+
+/* ---------- Scheda dell'ingrediente ---------- */
+
+.ingredient-card-body { padding: 0 22px 20px; }
+.card-message { margin: 0 0 12px; }
+.card-message[hidden] { display: none; }
+.card-section + .card-section { margin-top: 18px; }
+
+.card-section h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.card-prices { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 14px; overflow-wrap: anywhere; }
+.card-prices small { display: block; color: var(--ink-3); }
+.card-help { margin: 0 0 4px; font-size: 13px; color: var(--ink-2); }
+
+.card-product { display: grid; gap: 2px; padding: 10px 0; border-top: 1px solid var(--rule); font-size: 13px; }
+.card-product-name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.card-product-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+.card-product-fields .input { width: auto; height: 34px; }
+.card-product-fields .inline-inputs { align-items: center; }
+.card-product-fields input { width: 90px; flex: none; }
+.unit-after { color: var(--ink-3); }
+.card-product .check { margin-top: 4px; }
+
+.card-ingredient { display: grid; grid-template-columns: minmax(0, 1fr) 130px; align-items: end; gap: 10px; }
+.card-ingredient .btn { justify-self: start; }
 
 /* ---------- Spesa ---------- */
 
@@ -1511,7 +1764,7 @@ ul.notice { padding-left: 32px; }
 .ingredient-row.is-negligible .dish-name { color: var(--ink-3); }
 .check-sm { margin-right: 4px; font-size: 13px; }
 
-.ingredient-edit-form { display: grid; grid-template-columns: minmax(0, 2fr) 160px auto; align-items: center; gap: 8px; }
+.ingredient-edit-form { display: grid; grid-template-columns: minmax(0, 2fr) 140px minmax(0, 1.4fr) auto; align-items: center; gap: 8px; }
 .ingredient-edit-form .input { height: 36px; }
 
 @media (max-width: 900px) {
@@ -1539,7 +1792,7 @@ ul.notice { padding-left: 32px; }
   .recipe-qty { grid-area: qty; }
   .recipe-counts { grid-area: counts; justify-self: end; }
   .recipe-add { grid-template-columns: minmax(0, 1fr) 76px; }
-  .recipe-add input[name="name"],
+  .recipe-add .suggest,
   .recipe-add .btn { grid-column: 1 / -1; }
   .recipe-link { width: 100%; margin-left: 0; }
 
@@ -1606,7 +1859,8 @@ ul.notice { padding-left: 32px; }
   .app { padding: 12px 16px 40px; }
 
   .week-toolbar { gap: 10px; }
-  .week-title { flex: 1; text-align: center; }
+  .week-title { flex: 1; justify-content: center; gap: 8px; text-align: center; }
+  .week-grade { width: 32px; height: 32px; border-radius: 9px; font-size: 19px; }
   .week-actions { width: 100%; justify-content: space-between; margin-left: 0; }
 
   .board {
@@ -1671,11 +1925,14 @@ ul.notice { padding-left: 32px; }
   .shopping-drop,
   .hint,
   .week-start,
+  .week-score,
+  .week-grade,
   .today-badge,
   .toast { display: none !important; }
 
   .app { max-width: none; padding: 0; }
   .week-toolbar { margin: 0 0 6px; }
+  .slot[data-fg] { box-shadow: none; background: none; }
 
   /* Tutto in un foglio (190 mm utili): titolo e tre righe di altezza fissa, che la
      lista della spesa non può allungare. */

@@ -63,6 +63,14 @@ $ready = check('PHP', function () {
         return $n ? ($n === 1 ? '1 utente' : "$n utenti") : 'nessuno: crea il primo qui sotto';
     }, $checks);
 
+// Non indispensabile: senza openssl il sito funziona, ma non si può entrare con le passkey.
+check('Estensione openssl (passkey)', function () {
+    if (!extension_loaded('openssl')) {
+        throw new HttpError(500, "Non attiva: l'accesso con le passkey non funzionerà");
+    }
+    return 'attiva';
+}, $checks);
+
 $hasUsers = $ready && users();
 $message = '';
 $error = '';

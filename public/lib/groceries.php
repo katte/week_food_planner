@@ -38,6 +38,7 @@ function grocerySchema(array $t, string $options): array
             name VARCHAR(80) NOT NULL,
             unit VARCHAR(2) NOT NULL DEFAULT 'kg' COMMENT 'unità del prezzo: kg | l | pz',
             negligible TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = non entra nel costo dei piatti',
+            food_group VARCHAR(20) NULL COMMENT 'gruppo alimentare; NULL = riconosciuto dal nome, vuoto = nessuno',
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY uq_name (name)
@@ -140,6 +141,8 @@ function migrateSchema(): void
         [$t['products'], 'price_per_kg', 'DECIMAL(10,3) NULL AFTER package_unit'],
         [$t['receipt_items'], 'weight_from_product', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER weight_kg'],
         [$t['shopping'], 'category', 'VARCHAR(20) NULL AFTER text'],
+        [$t['dishes'], 'food_groups', "VARCHAR(100) NULL COMMENT 'gruppi alimentari separati da virgole; NULL = riconosciuti da soli' AFTER servings"],
+        [$t['ingredients'], 'food_group', "VARCHAR(20) NULL COMMENT 'gruppo alimentare; NULL = riconosciuto dal nome, vuoto = nessuno' AFTER negligible"],
     ];
     foreach ($columns as [$table, $column, $definition]) {
         if (!db()->query("SHOW COLUMNS FROM $table LIKE '$column'")->fetchAll()) {
@@ -249,7 +252,7 @@ function listIngredients(?int $onlyId = null): array
 {
     $t = tables();
     $stmt = db()->prepare(
-        "SELECT i.id, i.name, i.unit, i.negligible,
+        "SELECT i.id, i.name, i.unit, i.negligible, i.food_group,
                 (SELECT COUNT(*) FROM {$t['products']} p WHERE p.ingredient_id = i.id) AS products,
                 (SELECT COUNT(DISTINCT di.dish_id) FROM {$t['dish_ingredients']} di WHERE di.ingredient_id = i.id) AS dishes
          FROM {$t['ingredients']} i
@@ -266,6 +269,9 @@ function listIngredients(?int $onlyId = null): array
             'date' => $row['purchased_on'],
             'store' => $row['store'],
             'product' => $row['product'],
+            'productId' => (string) $row['product_id'],
+            // L'acquisto da cui viene il prezzo: peso, formato o pezzi su cui è calcolato.
+            'purchase' => purchaseInfo($row),
         ];
     }
 
@@ -276,6 +282,8 @@ function listIngredients(?int $onlyId = null): array
             'name' => $row['name'],
             'unit' => $row['unit'],
             'negligible' => (bool) $row['negligible'],
+            // null: gruppo alimentare riconosciuto dal nome; '' = nessuno (sale, olio...).
+            'foodGroup' => $row['food_group'],
             // Ultimo prezzo pieno per ogni unità in cui è stato comprato: il costo usa quella dell'ingrediente.
             'prices' => (object) ($prices[$id] ?? []),
             'products' => (int) $row['products'],
@@ -331,11 +339,16 @@ function createIngredient(array $input): array
 function updateIngredient(int $id, array $input): array
 {
     $t = tables();
-    findIngredient($id);
+    $current = findIngredient($id);
     $ingredient = parseIngredient($input);
     assertIngredientNameAvailable($ingredient['name'], $id);
-    db()->prepare("UPDATE {$t['ingredients']} SET name = ?, unit = ?, negligible = ? WHERE id = ?")
-        ->execute([$ingredient['name'], $ingredient['unit'], $ingredient['negligible'] ? 1 : 0, $id]);
+    // Senza foodGroup (es. la spunta «trascurabile») il gruppo resta quello che è.
+    $group = array_key_exists('foodGroup', $input) ? $input['foodGroup'] : $current['foodGroup'];
+    if ($group !== null && $group !== '' && !in_array($group, FOOD_GROUPS, true)) {
+        throw new HttpError(400, 'Gruppo alimentare non valido');
+    }
+    db()->prepare("UPDATE {$t['ingredients']} SET name = ?, unit = ?, negligible = ?, food_group = ? WHERE id = ?")
+        ->execute([$ingredient['name'], $ingredient['unit'], $ingredient['negligible'] ? 1 : 0, $group, $id]);
     return findIngredient($id);
 }
 

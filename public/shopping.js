@@ -106,25 +106,28 @@ function shopTerm(text) {
 // Radice per riconoscere singolare e plurale: senza vocali finali (e la h di -che/-ghi).
 const shopStem = (word) => word.replace(/[aeiou]+$/, '').replace(/([cg])h$/, '$1');
 
-// Indice del dizionario: parole esatte, radici (null se in due reparti diversi) ed espressioni.
-const SHOP_INDEX = (() => {
+// Indice di un dizionario { chiave: parole }: parole esatte, radici (null se in due chiavi
+// diverse) ed espressioni, dalla più lunga. Serve anche ai gruppi alimentari (nutrition.js).
+function wordIndex(wordsByKey) {
   const exact = new Map();
   const stems = new Map();
   const phrases = [];
-  for (const [category, list] of Object.entries(SHOP_WORDS)) {
+  for (const [key, list] of Object.entries(wordsByKey)) {
     const [words, ...rest] = list.split(';');
     for (const phrase of rest) {
       const term = shopTerm(phrase);
-      if (term) phrases.push([` ${term} `, category]);
+      if (term) phrases.push([` ${term} `, key]);
     }
     for (const word of words.split(/\s+/).map(shopTerm).filter(Boolean)) {
-      exact.set(word, category);
+      exact.set(word, key);
       const stem = shopStem(word);
-      if (stem.length >= 3) stems.set(stem, stems.has(stem) && stems.get(stem) !== category ? null : category);
+      if (stem.length >= 3) stems.set(stem, stems.has(stem) && stems.get(stem) !== key ? null : key);
     }
   }
   return { exact, stems, phrases: phrases.sort((a, b) => b[0].length - a[0].length) };
-})();
+}
+
+const SHOP_INDEX = wordIndex(SHOP_WORDS);
 
 function categorize(text) {
   const term = shopTerm(text);

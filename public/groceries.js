@@ -897,10 +897,12 @@ function ingredientRow(i) {
   const otherText = others.length
     ? ` · <span class="muted">comprato anche ${others.map(([unit, p]) => `${PRICE_UNIT_NAMES[unit]} (${priceLabel(p.value, unit)})`).join(', ')}</span>`
     : '';
+  const group = ingredientFoodGroup(i);
   return `
     <li class="dish-row ingredient-row${i.negligible ? ' is-negligible' : ''}" data-id="${i.id}">
       <div>
         <span class="dish-name">${highlight(i.name, spesa.ingredientQuery)}</span>
+        ${group ? `<span class="dish-groups">${foodGroupChips(new Set([group]))}</span>` : ''}
         <span class="dish-notes">${priceText}${otherText}</span>
       </div>
       <span class="dish-stats">${plural(i.dishes, 'ricetta', 'ricette')} · ${plural(i.products, 'articolo', 'articoli')}</span>
@@ -918,6 +920,7 @@ function ingredientEditRow(i) {
       <form class="ingredient-edit-form" data-submit="ingredient-save" data-escape="ingredient-edit-cancel" autocomplete="off">
         <input name="name" class="input" required maxlength="80" value="${esc(i.name)}" aria-label="Nome dell'ingrediente">
         <select name="unit" class="input" aria-label="Unità del prezzo">${priceUnitOptions(i.unit)}</select>
+        <select name="foodGroup" class="input" aria-label="Gruppo alimentare">${foodGroupOptions(i)}</select>
         <div class="dish-actions">
           <button type="submit" class="btn btn-primary btn-sm">Salva</button>
           <button type="button" class="btn btn-ghost btn-sm" data-action="ingredient-edit-cancel">Annulla</button>
@@ -948,7 +951,8 @@ async function saveIngredient(form) {
   const current = state.ingredients.find((i) => i.id === id);
   const data = Object.fromEntries(new FormData(form));
   try {
-    replaceIngredient(await api('ingredient-update', { params: { id }, body: { ...data, negligible: current.negligible } }));
+    const body = { ...data, negligible: current.negligible, foodGroup: foodGroupValue(data.foodGroup) };
+    replaceIngredient(await api('ingredient-update', { params: { id }, body }));
     spesa.editingIngredientId = null;
     renderIngredientList();
   } catch (err) {

@@ -43,6 +43,7 @@ const ICONS = {
   print: svg('M7 9V3h10v6M7 17H4v-6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6h-3M7 14h10v7H7z'),
   warn: svg('M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01'),
   grip: svg('M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01'),
+  key: svg('M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4'),
 };
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,7 @@ const state = {
   recipeDishId: null, // piatto con la ricetta aperta in «I miei piatti»
   recipeDraft: null, // ricetta in modifica: { servings, lines }
   week: null, // settimana aperta: { key, meals, notes, shopping }
+  lastWeekKey: null, // ultima settimana aperta: il menu «Settimana» riporta lì
   shoppingTerms: {}, // reparti imparati per le voci della spesa (shopping.js)
   weekStartDay: 0, // giorno in cui iniziano le settimane: 0 = lunedì ... 6 = domenica
   editingDishId: null,
@@ -241,7 +243,7 @@ let lastScrollKey = null;
 async function route() {
   if (!state.user) return showLogin();
   flushWeekSave();
-  if (picker.dialog.open) picker.dialog.close();
+  closeDialogs();
 
   const hash = location.hash || '#/settimana';
   let match = null;
@@ -264,6 +266,11 @@ async function route() {
     if (token !== renderToken || err instanceof AuthError) return;
     showError(err);
   }
+}
+
+// Cambiando pagina (o uscendo) si chiudono le finestre aperte: scelta del piatto, scheda dell'ingrediente.
+function closeDialogs() {
+  for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
 }
 
 function showError(err) {
@@ -289,7 +296,7 @@ function setUser(user) {
 function showLogin(message = '', needsSetup = false) {
   ++renderToken; // annulla eventuali viste ancora in caricamento
   setUser(null);
-  if (picker.dialog.open) picker.dialog.close();
+  closeDialogs();
   app.innerHTML = `
     <div class="login">
       <form id="login-form" class="card login-card">
@@ -304,6 +311,7 @@ function showLogin(message = '', needsSetup = false) {
         <label class="check"><input type="checkbox" name="remember" checked> Resta collegato su questo dispositivo</label>
         <p id="login-error" class="login-error" role="alert" hidden></p>
         <button type="submit" class="btn btn-primary">Entra</button>
+        ${passkeySupported() ? `<button type="button" class="btn" data-action="passkey-login">${ICONS.key}Entra con una passkey</button>` : ''}
       </form>
     </div>`;
   document.title = 'Accedi · Menù della settimana';
@@ -341,6 +349,7 @@ async function logout() {
     // anche se il server non risponde, l'interfaccia torna comunque al login
   }
   state.week = null;
+  state.lastWeekKey = null;
   state.dishes = [];
   state.history = [];
   showLogin();
@@ -354,18 +363,23 @@ document.getElementById('logout-btn').addEventListener('click', logout);
 
 async function showWeek(match, token) {
   const requested = match[1];
+  // Senza data (menu «Settimana»): l'ultima settimana aperta, altrimenti quella attuale.
+  if (!requested && state.lastWeekKey) return location.replace(`#/settimana/${state.lastWeekKey}`);
   const key = requested ? toKey(weekStartOf(fromKey(requested))) : currentWeekKey();
   if (requested && key !== requested) return location.replace(`#/settimana/${key}`);
 
   await saveChain; // non rileggere una settimana mentre la sua ultima modifica è in viaggio
-  const [data, dishes] = await Promise.all([api('week', { params: { week: key } }), api('dishes')]);
+  // Piatti e ingredienti servono anche alla pagella (gruppi alimentari dal nome e dalla ricetta).
+  const [data, dishes, ingredients] = await Promise.all([api('week', { params: { week: key } }), api('dishes'), api('ingredients')]);
   if (token !== renderToken) return;
   // Il giorno di inizio può essere stato cambiato da un altro dispositivo.
   state.weekStartDay = data.weekStartDay;
   if (data.week !== key) return location.replace(`#/settimana/${data.week}`);
 
   state.dishes = dishes;
+  state.ingredients = ingredients;
   state.week = { key, meals: data.meals, notes: data.notes, shopping: data.shopping };
+  state.lastWeekKey = key;
   state.shoppingTerms = data.shoppingTerms ?? {};
   app.innerHTML = weekTemplate(state.week);
   renderSlots();
@@ -382,13 +396,16 @@ function weekTemplate(week) {
     <div class="week-toolbar">
       <a class="icon-btn" href="#/settimana/${toKey(addDays(start, -7))}" aria-label="Settimana precedente" title="Settimana precedente">${ICONS.left}</a>
       <div class="week-title">
-        <h1>${esc(weekRangeLabel(week.key))}</h1>
-        <p>Settimana ${weekNumber(start)} · ${weekRelation(week.key)}</p>
+        <div>
+          <h1>${esc(weekRangeLabel(week.key))}</h1>
+          <p>Settimana ${weekNumber(start)} · ${weekRelation(week.key)}</p>
+        </div>
+        <button type="button" id="week-grade" class="week-grade" data-action="score-scroll" hidden></button>
       </div>
       <a class="icon-btn" href="#/settimana/${toKey(addDays(start, 7))}" aria-label="Settimana successiva" title="Settimana successiva">${ICONS.right}</a>
       <div class="week-actions">
         <span id="save-status" class="save-status" aria-live="polite"></span>
-        ${isCurrent ? '' : '<a class="btn btn-sm" href="#/settimana">Vai a questa settimana</a>'}
+        ${isCurrent ? '' : `<a class="btn btn-sm" href="#/settimana/${currentWeekKey()}">Vai a questa settimana</a>`}
         <button type="button" class="btn btn-sm" data-action="print">${ICONS.print}Stampa</button>
       </div>
     </div>
@@ -422,9 +439,12 @@ function weekTemplate(week) {
       </section>
     </div>
 
+    <section id="week-score" class="week-score" aria-label="Pagella della settimana" hidden></section>
+
     <p class="hint">
       Premi <strong>+</strong> per scegliere un piatto dalla tua lista.
-      <span class="hint-drag">Trascina un piatto per spostarlo in un altro pasto (tieni premuto Ctrl per copiarlo).</span>
+      <span class="hint-mouse">Trascina un piatto per spostarlo in un altro pasto (tieni premuto Ctrl per copiarlo).</span>
+      <span class="hint-touch">Per spostare un piatto in un altro pasto, tienilo premuto e trascinalo.</span>
     </p>
     <label class="week-start">La settimana inizia di
       <select class="input" data-change="week-start" aria-label="Giorno di inizio della settimana">
@@ -464,6 +484,7 @@ function renderSlots() {
       .join('');
     slot.classList.toggle('is-empty', entries.length === 0);
   }
+  renderWeekScore();
 }
 
 // La lista della spesa (renderShopping e i suoi eventi) sta in shopping.js.
@@ -542,25 +563,147 @@ app.addEventListener('drop', (e) => {
   const slot = drag && e.target.closest?.('.slot');
   if (!slot) return;
   e.preventDefault();
-  const from = state.week.meals[drag.day][drag.meal];
-  const to = state.week.meals[slot.dataset.day][slot.dataset.meal];
-  const copy = e.ctrlKey || e.altKey;
-  if (from !== to || copy) {
-    const entry = copy ? { ...from[drag.index] } : from.splice(drag.index, 1)[0];
-    to.push(entry);
-    renderSlots();
-    scheduleSave();
-  }
+  moveEntry(drag, slot, e.ctrlKey || e.altKey);
   endDrag();
 });
 
 app.addEventListener('dragend', endDrag);
+
+// from: { day, meal, index } del piatto; slot: il pasto in cui lasciarlo.
+function moveEntry(from, slot, copy) {
+  const source = state.week.meals[from.day][from.meal];
+  const target = state.week.meals[slot.dataset.day][slot.dataset.meal];
+  if (source === target && !copy) return;
+  target.push(copy ? { ...source[from.index] } : source.splice(from.index, 1)[0]);
+  renderSlots();
+  scheduleSave();
+}
 
 function endDrag() {
   drag = null;
   for (const el of app.querySelectorAll('.is-drop-target, .is-dragging')) {
     el.classList.remove('is-drop-target', 'is-dragging');
   }
+}
+
+// --- Trascinamento col dito ------------------------------------------------
+// Sui telefoni il trascinamento del browser non c'è o non funziona: si tiene premuto il
+// piatto finché si stacca, poi lo si porta nel pasto. Un tocco breve o uno scorrimento
+// restano quelli di sempre. Vicino ai bordi dello schermo la pagina scorre da sola.
+
+const HOLD_MS = 350;
+let touchDrag = null; // { chip, from, id, x, y, timer, ghost, active, scrolling }
+
+app.addEventListener('touchstart', (e) => {
+  if (touchDrag) cancelTouchDrag(); // un secondo dito, o un tocco rimasto a metà
+  const chip = e.target.closest?.('.chip');
+  if (!chip || e.touches.length > 1 || e.target.closest('.chip-remove')) return;
+  const slot = chip.closest('.slot');
+  const t = e.changedTouches[0];
+  touchDrag = {
+    chip,
+    from: { day: slot.dataset.day, meal: slot.dataset.meal, index: Number(chip.dataset.index) },
+    id: t.identifier,
+    x: t.clientX,
+    y: t.clientY,
+    timer: setTimeout(startTouchDrag, HOLD_MS),
+  };
+  chip.draggable = false; // altrimenti il browser potrebbe avviare anche il suo trascinamento
+}, { passive: true });
+
+function startTouchDrag() {
+  const { chip } = touchDrag;
+  const rect = chip.getBoundingClientRect();
+  const ghost = chip.cloneNode(true);
+  ghost.classList.add('chip-ghost');
+  ghost.style.width = `${rect.width}px`;
+  document.body.append(ghost);
+  Object.assign(touchDrag, { ghost, active: true });
+  chip.classList.add('is-dragging');
+  navigator.vibrate?.(15);
+  moveTouchDrag();
+}
+
+function touchOf(e) {
+  return [...e.changedTouches].find((t) => t.identifier === touchDrag.id);
+}
+
+// Senza passive:false il preventDefault non fermerebbe lo scorrimento della pagina.
+app.addEventListener('touchmove', (e) => {
+  const t = touchDrag && touchOf(e);
+  if (!t) return;
+  if (!touchDrag.active) {
+    // Il dito si è mosso prima di staccare il piatto: è uno scorrimento.
+    if (Math.hypot(t.clientX - touchDrag.x, t.clientY - touchDrag.y) > 10) cancelTouchDrag();
+    return;
+  }
+  e.preventDefault();
+  touchDrag.x = t.clientX;
+  touchDrag.y = t.clientY;
+  moveTouchDrag();
+}, { passive: false });
+
+function moveTouchDrag() {
+  const { ghost, x, y } = touchDrag;
+  // Sopra il dito, che altrimenti lo coprirebbe.
+  ghost.style.transform = `translate(${x - ghost.offsetWidth / 2}px, ${y - ghost.offsetHeight - 24}px)`;
+  const slot = document.elementFromPoint(x, y)?.closest('.slot');
+  for (const s of app.querySelectorAll('.slot.is-drop-target')) if (s !== slot) s.classList.remove('is-drop-target');
+  slot?.classList.add('is-drop-target');
+  if (!touchDrag.scrolling && touchEdgeSpeed()) {
+    touchDrag.scrolling = true;
+    requestAnimationFrame(touchAutoScroll);
+  }
+}
+
+// Velocità di scorrimento: più veloce quanto più il dito è vicino al bordo.
+function touchEdgeSpeed() {
+  const edge = 80;
+  const { y } = touchDrag;
+  if (y < edge) return -Math.ceil((edge - y) / 6);
+  if (y > window.innerHeight - edge) return Math.ceil((y - window.innerHeight + edge) / 6);
+  return 0;
+}
+
+function touchAutoScroll() {
+  const speed = touchDrag?.active && touchEdgeSpeed();
+  if (!speed) {
+    if (touchDrag) touchDrag.scrolling = false;
+    return;
+  }
+  window.scrollBy(0, speed);
+  touchDrag.scrolling = false;
+  moveTouchDrag(); // sotto il dito fermo ora c'è un altro pasto
+}
+
+app.addEventListener('touchend', (e) => {
+  if (!touchDrag || !touchOf(e)) return;
+  if (touchDrag.active) {
+    e.preventDefault(); // niente clic sul punto in cui si lascia il piatto
+    const slot = document.elementFromPoint(touchDrag.x, touchDrag.y)?.closest('.slot');
+    const { from } = touchDrag;
+    cancelTouchDrag();
+    if (slot) moveEntry(from, slot, false);
+  } else {
+    cancelTouchDrag();
+  }
+});
+
+app.addEventListener('touchcancel', () => {
+  if (touchDrag) cancelTouchDrag();
+});
+
+// Tenendo premuto, Android aprirebbe il menu del browser.
+app.addEventListener('contextmenu', (e) => {
+  if (touchDrag) e.preventDefault();
+});
+
+function cancelTouchDrag() {
+  clearTimeout(touchDrag.timer);
+  touchDrag.ghost?.remove();
+  touchDrag.chip.draggable = true;
+  touchDrag = null;
+  endDrag();
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +939,7 @@ function dishRow(d) {
       <div>
         <span class="dish-name">${highlight(d.name, state.dishFilter.q)}</span>
         ${d.notes ? `<span class="dish-notes">${esc(d.notes)}</span>` : ''}
+        ${dishGroupsLabel(d)}
         ${dishCostLabel(d)}
       </div>
       <span class="dish-stats">${usageLabel(d, { long: true })}</span>
@@ -819,6 +963,7 @@ function dishEditRow(d) {
           <button type="submit" class="btn btn-primary btn-sm">Salva</button>
           <button type="button" class="btn btn-ghost btn-sm" data-action="dish-cancel">Annulla</button>
         </div>
+        ${dishGroupsEditHtml(d)}
       </form>
     </li>`;
 }
@@ -859,7 +1004,9 @@ async function addDish(form) {
 async function saveDishEdit(form) {
   const id = form.dataset.id;
   try {
-    const dish = await api('dish-update', { params: { id }, body: Object.fromEntries(new FormData(form)) });
+    const { name, category, notes } = form.elements;
+    const body = { name: name.value, category: category.value, notes: notes.value, foodGroups: dishGroupsFromForm(form) };
+    const dish = await api('dish-update', { params: { id }, body });
     state.dishes = state.dishes.map((d) => (d.id === id ? dish : d));
     sortDishes();
     state.editingDishId = null;
@@ -889,9 +1036,12 @@ async function deleteDish(id) {
 // ---------------------------------------------------------------------------
 
 async function showHistory(match, token) {
-  const weeks = await api('weeks');
+  // Piatti e ingredienti servono al voto della pagella di ogni settimana.
+  const [weeks, dishes, ingredients] = await Promise.all([api('weeks'), api('dishes'), api('ingredients')]);
   if (token !== renderToken) return;
   state.history = weeks;
+  state.dishes = dishes;
+  state.ingredients = ingredients;
 
   app.innerHTML = `
     <div class="page">
@@ -926,7 +1076,7 @@ function renderHistory() {
     container.innerHTML = emptyTemplate(
       'Lo storico è ancora vuoto',
       'Quando pianifichi una settimana la ritrovi qui, così puoi riguardare cosa hai mangiato.',
-      '<a class="btn btn-primary" href="#/settimana">Pianifica questa settimana</a>',
+      `<a class="btn btn-primary" href="#/settimana/${currentWeekKey()}">Pianifica questa settimana</a>`,
     );
     return;
   }
@@ -955,6 +1105,7 @@ function historyCard(week) {
   const todayKey = toKey(new Date());
   const isCurrent = week.week === currentWeekKey();
   const planned = DAYS.reduce((n, d) => n + MEALS.filter((m) => week.meals[d.key][m.key].length).length, 0);
+  const score = planned ? weekScore(week) : null;
 
   const cells = weekDays(week.week).map((day) => {
     const head = `<div class="mini-head${toKey(day.date) === todayKey ? ' is-today' : ''}">${day.short} <span>${day.date.getDate()}</span></div>`;
@@ -971,6 +1122,8 @@ function historyCard(week) {
     <article class="history-week${isCurrent ? ' is-current' : ''}">
       <header class="history-head">
         <a class="history-title" href="#/settimana/${week.week}">${esc(weekRangeLabel(week.week))}</a>
+        ${score ? `<a class="week-grade history-grade grade-${score.grade.toLowerCase()}" href="#/settimana/${week.week}"
+          title="Pagella della settimana: ${score.total}/100" aria-label="Pagella: ${score.grade}, ${score.total} punti su 100">${score.grade}</a>` : ''}
         <span class="badge">${weekRelation(week.week)}</span>
         <span class="history-meta">${plural(planned, 'pasto', 'pasti')} su 14</span>
         <a class="btn btn-sm history-open" href="#/settimana/${week.week}">Apri</a>

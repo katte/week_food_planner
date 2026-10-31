@@ -8,14 +8,15 @@ PHP + MySQL sul server, JavaScript senza framework né build nel browser: gira s
 
 - **Settimana**: tabellone con pranzo e cena dei 7 giorni, note e lista della spesa, stampabile in A4. Il giorno di inizio è configurabile (es. sabato, se fai la spesa il sabato).
 - **Lista della spesa**: un solo campo per aggiungere; ogni voce va da sola nel suo reparto (frutta, verdura, carne…) grazie a un dizionario di parole comuni. Le voci si riordinano trascinandole; spostandone una in un altro reparto, il sito lo ricorda per le volte successive.
-- **Piatti**: i piatti che sai fare, con ricetta, porzioni e costo totale e a porzione. Un avviso segnala gli ingredienti che non hanno ancora un prezzo.
+- **Pagella della settimana**: un voto dalla A alla E su quanto il menù segue le frequenze della dieta mediterranea (verdura a ogni pasto, pesce e legumi almeno 2 volte, poca carne rossa e pochi salumi…), con il dettaglio gruppo per gruppo. I gruppi alimentari dei piatti si riconoscono dal nome e dagli ingredienti della ricetta con un dizionario, senza servizi esterni, e si possono correggere a mano.
+- **Piatti**: i piatti che sai fare, con ricetta, porzioni e costo totale e a porzione. Sotto ogni ingrediente della ricetta c'è il prezzo usato e l'acquisto da cui viene; dal nome si apre una scheda per correggerlo al volo (formato o prezzo al kg degli articoli, gruppo alimentare). Un avviso segnala gli ingredienti che non hanno ancora un prezzo.
 - **Spesa**: scontrini letti da un'AI (foto → JSON con il prompt incluso), articoli con lo storico dei prezzi al kg, al litro o al pezzo, ingredienti collegati alle ricette.
 - **Storico**: le settimane passate, con ricerca per piatto.
-- **Utenti**: accesso con password. I dati sono condivisi da tutti gli utenti (pensato per una famiglia).
+- **Utenti**: accesso con password o con **passkey** (impronta, volto o PIN del dispositivo), registrata dalla pagina Utenti. I dati sono condivisi da tutti gli utenti (pensato per una famiglia).
 
 ## Requisiti
 
-PHP 7.4+ con `pdo_mysql`, MySQL o MariaDB, Apache (per i `.htaccess`; con altri server va negato l'accesso a `config.php` e a `lib/`).
+PHP 7.4+ con `pdo_mysql` (e `openssl` per le passkey), MySQL o MariaDB, Apache (per i `.htaccess`; con altri server va negato l'accesso a `config.php` e a `lib/`). HTTPS: le passkey funzionano solo lì, e il `.htaccess` reindirizza sempre su https.
 
 ## Installazione
 
@@ -43,10 +44,11 @@ public/                 il sito da pubblicare
   index.html, styles.css
   app.js                settimana, piatti, storico, accesso
   shopping.js           lista della spesa: reparti, dizionario, riordino
+  nutrition.js          pagella della settimana: gruppi alimentari e frequenze
   recipes.js            ricette e costi
   groceries.js          scontrini, articoli, ingredienti
-  users.js              utenti
-  api.php               API JSON (lib/groceries.php: spesa e costi)
+  users.js              utenti e passkey
+  api.php               API JSON (lib/groceries.php: spesa e costi; lib/passkeys.php: passkey)
   setup.php             configurazione iniziale e reset delle password
   prompt-scontrino.txt  prompt per l'AI
 deploy.py               pubblicazione via FTP (facoltativa)
@@ -54,7 +56,9 @@ deploy.py               pubblicazione via FTP (facoltativa)
 
 ## Sicurezza
 
-Password salvate con `password_hash`, cookie di accesso firmati (HMAC con `secret`), blocco temporaneo dopo 10 tentativi sbagliati, `config.php` non raggiungibile dal browser. Non c'è registrazione pubblica: i nuovi utenti li crea chi ha già accesso. Usa HTTPS.
+Password salvate con `password_hash`, cookie di accesso firmati (HMAC con `secret`), blocco temporaneo dopo 10 tentativi sbagliati, `config.php` non raggiungibile dal browser, sito sempre in https. Non c'è registrazione pubblica: i nuovi utenti li crea chi ha già accesso.
+
+Passkey (WebAuthn) verificate dal server senza librerie esterne: chiavi ES256 e RS256, sfide monouso valide 5 minuti, controllo di sito, origine e contatore delle firme.
 
 `config.php`, `deploy_config.ini` e `.deploy_state.json` sono esclusi da git.
 

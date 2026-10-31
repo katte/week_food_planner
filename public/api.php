@@ -12,6 +12,12 @@
  *   POST api.php?action=login                      accesso              { username, password, remember }
  *   POST api.php?action=logout                     uscita
  *   GET  api.php?action=me                         utente collegato (401 se nessuno) e giorno di inizio settimana
+ *   POST api.php?action=passkey-login-options      sfida per entrare con una passkey (lib/passkeys.php)
+ *   POST api.php?action=passkey-login              accesso con passkey  { id, clientDataJSON, authenticatorData, signature, remember }
+ *   GET  api.php?action=passkeys                   passkey dell'utente collegato
+ *   POST api.php?action=passkey-register-options   sfida per registrare una passkey
+ *   POST api.php?action=passkey-register           registra la passkey  { clientDataJSON, attestationObject, name }
+ *   POST api.php?action=passkey-delete             elimina una propria passkey { id }
  *   GET  api.php?action=users                      utenti
  *   POST api.php?action=user-create                aggiunge un utente   { username, password, repeat }
  *   POST api.php?action=user-password              cambia la propria password { current, password, repeat }
@@ -20,7 +26,7 @@
  *
  *   GET  api.php?action=dishes                     elenco piatti (con statistiche d'uso)
  *   POST api.php?action=dish-create                crea un piatto       { name, category, notes }
- *   POST api.php?action=dish-update&id=ID          modifica un piatto   { name, category, notes }
+ *   POST api.php?action=dish-update&id=ID          modifica un piatto   { name, category, notes, foodGroups }
  *   POST api.php?action=dish-delete&id=ID          elimina un piatto
  *   GET  api.php?action=weeks                      tutte le settimane salvate, dalla più recente
  *   GET  api.php?action=week&week=AAAA-MM-GG       la settimana che contiene quel giorno (chiave = suo primo giorno)
@@ -30,7 +36,7 @@
  * Spesa e costi (codice in lib/groceries.php):
  *   GET  api.php?action=ingredients                ingredienti con l'ultimo prezzo
  *   POST api.php?action=ingredient-create          { name, unit, negligible }
- *   POST api.php?action=ingredient-update&id=ID    { name, unit, negligible }
+ *   POST api.php?action=ingredient-update&id=ID    { name, unit, negligible, foodGroup }
  *   POST api.php?action=ingredient-delete&id=ID
  *   POST api.php?action=dish-recipe&id=ID          ricetta di un piatto { servings, lines }
  *   GET  api.php?action=products                   articoli comprati con l'ultimo acquisto
@@ -70,6 +76,8 @@ const SHOPPING_CATEGORIES = [
     'colazione', 'surgelati', 'bevande', 'casa', 'igiene', 'animali', 'altro',
 ];
 const CATEGORIES = ['primo', 'secondo', 'unico', 'contorno', 'altro'];
+// Gruppi alimentari per la pagella della settimana (nomi, parole e regole in nutrition.js).
+const FOOD_GROUPS = ['verdura', 'legumi', 'pesce', 'carne_bianca', 'carne_rossa', 'salumi', 'uova', 'formaggi'];
 const MAX_BODY = 1000000;
 
 const AUTH_COOKIE = 'wfp_auth';
@@ -95,6 +103,7 @@ class HttpError extends Exception
 }
 
 require __DIR__ . '/lib/groceries.php';
+require __DIR__ . '/lib/passkeys.php';
 
 // ---------------------------------------------------------------------------
 // Database
@@ -151,6 +160,7 @@ function tables(): array
         }
         $names = [
             'dishes', 'weeks', 'meals', 'shopping', 'shopping_terms', 'login_attempts', 'settings', 'users',
+            'passkeys', 'passkey_challenges',
             'ingredients', 'dish_ingredients', 'products', 'product_aliases', 'receipts', 'receipt_items',
         ];
         foreach ($names as $name) {
@@ -174,6 +184,7 @@ function createSchema(): void
             category VARCHAR(20) NOT NULL DEFAULT 'altro',
             notes VARCHAR(300) NOT NULL DEFAULT '',
             servings TINYINT UNSIGNED NOT NULL DEFAULT 4 COMMENT 'porzioni della ricetta',
+            food_groups VARCHAR(100) NULL COMMENT 'gruppi alimentari separati da virgole; NULL = riconosciuti da soli',
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY uq_name (name)
@@ -234,7 +245,7 @@ function createSchema(): void
             PRIMARY KEY (name)
         ) $options",
     ];
-    foreach (array_merge($statements, grocerySchema($t, $options)) as $sql) {
+    foreach (array_merge($statements, grocerySchema($t, $options), passkeySchema($t, $options)) as $sql) {
         db()->exec($sql);
     }
     migrateSchema();
@@ -546,7 +557,7 @@ function selectDishes(string $where = '', array $params = []): array
 {
     $t = tables();
     $stmt = db()->prepare(
-        "SELECT d.id, d.name, d.category, d.notes, d.servings, d.created_at,
+        "SELECT d.id, d.name, d.category, d.notes, d.servings, d.food_groups, d.created_at,
                 COALESCE(s.times_planned, 0) AS times_planned, s.last_planned
          FROM {$t['dishes']} d
          LEFT JOIN (
@@ -568,6 +579,8 @@ function selectDishes(string $where = '', array $params = []): array
             'category' => $row['category'],
             'notes' => $row['notes'],
             'servings' => (int) $row['servings'],
+            // null: gruppi riconosciuti dal sito (nome e ricetta); altrimenti quelli scelti, anche nessuno.
+            'foodGroups' => $row['food_groups'] === null ? null : array_values(array_filter(explode(',', $row['food_groups']))),
             'createdAt' => isoDateTime($row['created_at']),
             'timesPlanned' => (int) $row['times_planned'],
             'lastPlanned' => $row['last_planned'],
@@ -596,6 +609,18 @@ function parseDish(array $input): array
         'category' => in_array($category, CATEGORIES, true) ? $category : 'altro',
         'notes' => cleanLine($input['notes'] ?? null, 300),
     ];
+}
+
+// Gruppi scelti per un piatto, nell'ordine di FOOD_GROUPS: null = riconosciuti dal sito, '' = nessuno.
+function parseFoodGroups($value): ?string
+{
+    if ($value === null) {
+        return null;
+    }
+    if (!is_array($value)) {
+        throw new HttpError(400, 'Gruppi alimentari non validi');
+    }
+    return implode(',', array_values(array_intersect(FOOD_GROUPS, $value)));
 }
 
 function assertNameAvailable(string $name, int $exceptId = 0): void
@@ -629,12 +654,16 @@ function createDish(array $input): array
 function updateDish(int $id, array $input): array
 {
     $t = tables();
-    findDish($id);
+    $current = findDish($id);
     $dish = parseDish($input);
     assertNameAvailable($dish['name'], $id);
-    transaction(function (PDO $pdo) use ($t, $id, $dish) {
-        $pdo->prepare("UPDATE {$t['dishes']} SET name = ?, category = ?, notes = ? WHERE id = ?")
-            ->execute([$dish['name'], $dish['category'], $dish['notes'], $id]);
+    // Senza foodGroups (es. da una pagina vecchia ancora aperta) i gruppi restano quelli che sono.
+    $groups = array_key_exists('foodGroups', $input)
+        ? parseFoodGroups($input['foodGroups'])
+        : ($current['foodGroups'] === null ? null : implode(',', $current['foodGroups']));
+    transaction(function (PDO $pdo) use ($t, $id, $dish, $groups) {
+        $pdo->prepare("UPDATE {$t['dishes']} SET name = ?, category = ?, notes = ?, food_groups = ? WHERE id = ?")
+            ->execute([$dish['name'], $dish['category'], $dish['notes'], $groups, $id]);
         // Il nuovo nome finisce anche nelle copie salvate nelle settimane, così lo
         // storico mostra il nome più recente anche se un giorno il piatto viene eliminato.
         $pdo->prepare("UPDATE {$t['meals']} SET dish_name = ? WHERE dish_id = ?")
@@ -976,7 +1005,7 @@ function authRequired(): HttpError
 }
 
 // azione => [metodo, stato HTTP, gestore]. Tutte richiedono l'accesso tranne quelle in PUBLIC_ACTIONS.
-const PUBLIC_ACTIONS = ['login', 'logout', 'me'];
+const PUBLIC_ACTIONS = ['login', 'logout', 'me', 'passkey-login-options', 'passkey-login'];
 
 $routes = [
     'login' => ['POST', 200, function () {
@@ -993,6 +1022,24 @@ $routes = [
         }
         setAuthCookie($auth['user'], $auth['remember']); // rinnova la scadenza
         return ['user' => $auth['user'], 'weekStartDay' => weekStartDay()];
+    }],
+    'passkey-login-options' => ['POST', 200, function () {
+        return passkeyLoginOptions();
+    }],
+    'passkey-login' => ['POST', 200, function () {
+        return loginWithPasskey(readJson());
+    }],
+    'passkeys' => ['GET', 200, function () {
+        return listPasskeys();
+    }],
+    'passkey-register-options' => ['POST', 200, function () {
+        return passkeyRegisterOptions();
+    }],
+    'passkey-register' => ['POST', 201, function () {
+        return registerPasskey(readJson());
+    }],
+    'passkey-delete' => ['POST', 200, function () {
+        return deletePasskey(readJson());
     }],
     'users' => ['GET', 200, function () {
         return listUsers();
