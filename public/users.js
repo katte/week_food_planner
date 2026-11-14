@@ -3,7 +3,8 @@
 /*
  * Spazio, utenti e account.
  *   #/utenti            il tuo spazio (dal nome in alto a destra): nome, persone che lo usano,
- *                       la tua email e la tua password, le tue passkey, eliminazione dello spazio
+ *                       la tua email e la tua password, le tue passkey, i dati da scaricare,
+ *                       eliminazione dello spazio
  *   #/admin             per chi gestisce il sito ('admins' in config.php): riepilogo e spazi
  *   #/admin/ID          scheda di uno spazio: utenti, numeri, sospensione, eliminazione, sola lettura
  *   #/iscriviti         senza accesso: crea uno spazio con il suo primo utente
@@ -114,6 +115,13 @@ async function showUsers(match, token) {
           ${passkeySupported()
             ? `<button type="button" class="btn" data-action="passkey-add">${ICONS.key}Aggiungi una passkey</button>`
             : '<p class="muted">Per usare le passkey apri il sito in https.</p>'}
+        </section>
+
+        <section class="card user-form">
+          <h2 class="group-title">Scarica i tuoi dati</h2>
+          <p class="muted">Una copia di tutto lo spazio in un file (JSON): piatti e ricette, ingredienti, articoli,
+            scontrini, settimane e liste della spesa. Tienila come backup o usala per portare i dati altrove.</p>
+          <button type="button" class="btn" data-action="export-download">${ICONS.download}Scarica i dati</button>
         </section>
       </div>
 
@@ -637,7 +645,30 @@ Object.assign(changeHandlers, {
   },
 });
 
+// Nome del file scaricato: menu-della-settimana-<spazio>-<data>.json
+function exportFileName(spaceName) {
+  const slug = fold(spaceName).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'spazio';
+  return `menu-della-settimana-${slug}-${toKey(new Date())}.json`;
+}
+
 Object.assign(actions, {
+  'export-download': async (el) => {
+    el.disabled = true;
+    try {
+      const data = await api('export');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+      const link = Object.assign(document.createElement('a'), { href: url, download: exportFileName(data.space.name) });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Dati scaricati');
+    } catch (err) {
+      if (!(err instanceof AuthError)) toast(err.message, 'error');
+    } finally {
+      el.disabled = false;
+    }
+  },
   'passkey-login': (el) => loginWithPasskey(el),
   'passkey-add': (el) => addPasskey(el),
   'passkey-delete': async (el) => {

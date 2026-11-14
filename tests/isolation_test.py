@@ -200,6 +200,15 @@ def main(base, admin_name=None):
         check("reparti imparati", "mele di a" not in b_week["shoppingTerms"])
         check("giorno di inizio della settimana", B.ok("me")["weekStartDay"] == 0)
         check("utenti dello spazio", [u["name"] for u in B.ok("users")] == [b_name])
+        b_export = B.ok("export")
+        check("dati scaricati da B: niente di A", b_export["dishes"] == [] and b_export["receipts"] == []
+              and b_export["weeks"] == [] and [u["name"] for u in b_export["users"]] == [b_name], b_export)
+        a_export = A.ok("export")
+        check("dati scaricati da A: tutti i suoi", a_export["space"]["name"] == "TEST A"
+              and [d["id"] for d in a_export["dishes"]] == [dish["id"]] and len(a_export["receipts"]) == 1
+              and a_export["receipts"][0]["lines"][0]["product"] == "TEST Pollo A"
+              and any(w["notes"] == "nota di A" for w in a_export["weeks"])
+              and "password_hash" not in json.dumps(a_export), a_export.keys())
 
         print("B non può toccare i dati di A (404)")
         expect_status(B, "modificare il piatto", 404, "dish-update", {"name": "preso"}, id=dish["id"])

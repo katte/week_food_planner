@@ -297,6 +297,35 @@ function renameSpace(array $input): array
     return meData();
 }
 
+// Tutti i dati dello spazio, da scaricare come copia di sicurezza o per portarli altrove.
+// Niente password né email degli altri: degli utenti solo i nomi.
+function exportSpace(): array
+{
+    $t = tables();
+    $stmt = db()->prepare("SELECT name, created_at FROM {$t['spaces']} WHERE id = ?");
+    $stmt->execute([spaceId()]);
+    $space = $stmt->fetch();
+    $receipts = array_map(function (array $receipt) {
+        return getReceipt((int) $receipt['id']);
+    }, listReceipts());
+    return [
+        'format' => 'menu-della-settimana',
+        'version' => 1,
+        'exportedAt' => gmdate('c'),
+        'space' => ['name' => $space['name'], 'createdAt' => isoDateTime($space['created_at'])],
+        'users' => array_map(function (array $user) {
+            return ['name' => $user['name'], 'createdAt' => $user['createdAt']];
+        }, listUsers()),
+        'weekStartDay' => weekStartDay(),
+        'dishes' => selectDishes(),
+        'ingredients' => listIngredients(),
+        'products' => listProducts(),
+        'receipts' => $receipts,
+        'weeks' => array_values(loadWeeks()),
+        'shoppingTerms' => shoppingTerms(),
+    ];
+}
+
 // Elimina lo spazio con tutti i suoi dati e i suoi utenti (a cascata). Chiede la password.
 function deleteSpace(array $input): array
 {

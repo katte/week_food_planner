@@ -1254,7 +1254,7 @@ select.input {
 .space-form .field { flex: 1; }
 .space-form .btn { height: 40px; }
 
-.space-delete { margin-top: 28px; padding-top: 16px; border-top: 1px dashed var(--rule-strong); text-align: left; }
+.danger-zone.space-delete { margin-top: 28px; padding-top: 16px; border-top: 1px dashed var(--rule-strong); text-align: left; }
 .space-delete .muted { margin: 0 0 10px; font-size: 13px; }
 .space-delete-form { display: flex; flex-wrap: wrap; gap: 8px; }
 .space-delete-form .input { width: min(260px, 100%); height: 36px; }

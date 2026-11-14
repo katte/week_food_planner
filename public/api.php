@@ -31,6 +31,7 @@
  *   POST api.php?action=account-update             la propria email { email }
  *   POST api.php?action=space-update               nome dello spazio { name }
  *   POST api.php?action=space-delete               elimina lo spazio con tutti i dati { password }
+ *   GET  api.php?action=export                     tutti i dati dello spazio, per scaricarli (senza password)
  * Solo per chi gestisce il sito ('admins' in config.php):
  *   GET  api.php?action=admin-overview             riepilogo e tutti gli spazi
  *   GET  api.php?action=admin-space&id=ID          uno spazio con utenti e numeri
@@ -1021,6 +1022,9 @@ $routes = [
     }],
     'space-update' => ['POST', 200, function () {
         return renameSpace(readJson());
+    }],
+    'export' => ['GET', 200, function () {
+        return exportSpace();
     }],
     'space-delete' => ['POST', 200, function () {
         return deleteSpace(readJson());
