@@ -5,23 +5,44 @@
  * vengono create da sole al primo utilizzo. Si usano solo GET e POST
  * (alcuni hosting condivisi bloccano PUT e DELETE).
  *
- * Serve l'accesso: gli utenti stanno nel database (il primo si crea con setup.php, gli altri
- * dalla pagina Utenti) e, dopo il login, il browser tiene un cookie firmato con il 'secret'
- * di config.php. setup.php include questo file per usarne le funzioni.
+ * Serve l'accesso: gli utenti stanno nel database e, dopo il login, il browser tiene un cookie
+ * firmato con il 'secret' di config.php. Ogni utente appartiene a uno spazio (una famiglia, un
+ * gruppo, una persona sola) e vede solo i suoi dati: chiunque può crearne uno iscrivendosi, e
+ * aggiungervi altre persone dalla pagina Utenti (codice in lib/spaces.php). Il primo utente
+ * si può creare anche con setup.php, che include questo file per usarne le funzioni.
  *
  *   POST api.php?action=login                      accesso              { username, password, remember }
  *   POST api.php?action=logout                     uscita
- *   GET  api.php?action=me                         utente collegato (401 se nessuno) e giorno di inizio settimana
+ *   GET  api.php?action=me                         utente collegato (401 se nessuno), il suo spazio e il giorno di inizio settimana
+ *   POST api.php?action=signup                     nuovo spazio con il primo utente { space, username, password, repeat, email, accept }
+ *   POST api.php?action=password-forgot            link per una nuova password via email { login: nome utente o email }
+ *   POST api.php?action=password-reset             nuova password dal link { token, password, repeat }
  *   POST api.php?action=passkey-login-options      sfida per entrare con una passkey (lib/passkeys.php)
  *   POST api.php?action=passkey-login              accesso con passkey  { id, clientDataJSON, authenticatorData, signature, remember }
  *   GET  api.php?action=passkeys                   passkey dell'utente collegato
  *   POST api.php?action=passkey-register-options   sfida per registrare una passkey
  *   POST api.php?action=passkey-register           registra la passkey  { clientDataJSON, attestationObject, name }
  *   POST api.php?action=passkey-delete             elimina una propria passkey { id }
- *   GET  api.php?action=users                      utenti
- *   POST api.php?action=user-create                aggiunge un utente   { username, password, repeat }
+ *   GET  api.php?action=users                      utenti dello spazio
+ *   POST api.php?action=user-create                aggiunge un utente allo spazio { username, password, repeat }
  *   POST api.php?action=user-password              cambia la propria password { current, password, repeat }
- *   POST api.php?action=user-delete                elimina un utente (non l'ultimo) { username }
+ *   POST api.php?action=user-reset                 nuova password per un altro utente dello spazio { username, password, repeat }
+ *   POST api.php?action=user-delete                toglie un utente dallo spazio (non l'ultimo) { username }
+ *   POST api.php?action=account-update             la propria email { email }
+ *   POST api.php?action=space-update               nome dello spazio { name }
+ *   POST api.php?action=space-delete               elimina lo spazio con tutti i dati { password }
+ * Solo per chi gestisce il sito ('admins' in config.php):
+ *   GET  api.php?action=admin-overview             riepilogo e tutti gli spazi
+ *   GET  api.php?action=admin-space&id=ID          uno spazio con utenti e numeri
+ *   POST api.php?action=admin-space-create         nuovo spazio con il primo utente { name, username, password, repeat, email }
+ *   POST api.php?action=admin-space-update         rinomina { id, name }
+ *   POST api.php?action=admin-space-suspend        sospende o riattiva { id, suspended }
+ *   POST api.php?action=admin-space-delete         elimina { id }
+ *   POST api.php?action=admin-user-create          utente in uno spazio { id, username, password, repeat, email }
+ *   POST api.php?action=admin-user-reset           nuova password { username, password, repeat }
+ *   POST api.php?action=admin-user-delete          toglie un utente { username }
+ *   POST api.php?action=admin-space-view           apre uno spazio in sola lettura { id }
+ *   POST api.php?action=view-stop                  torna al proprio spazio
  *   POST api.php?action=settings-save              giorno di inizio settimana { weekStartDay: 0 = lunedì ... 6 = domenica }
  *
  *   GET  api.php?action=dishes                     elenco piatti (con statistiche d'uso)
@@ -104,6 +125,7 @@ class HttpError extends Exception
 
 require __DIR__ . '/lib/groceries.php';
 require __DIR__ . '/lib/passkeys.php';
+require __DIR__ . '/lib/spaces.php';
 
 // ---------------------------------------------------------------------------
 // Database
@@ -159,8 +181,8 @@ function tables(): array
             throw new HttpError(500, 'Il prefisso delle tabelle in config.php può contenere solo lettere, numeri e _');
         }
         $names = [
-            'dishes', 'weeks', 'meals', 'shopping', 'shopping_terms', 'login_attempts', 'settings', 'users',
-            'passkeys', 'passkey_challenges',
+            'spaces', 'dishes', 'weeks', 'meals', 'shopping', 'shopping_terms', 'login_attempts', 'settings', 'users',
+            'password_resets', 'passkeys', 'passkey_challenges',
             'ingredients', 'dish_ingredients', 'products', 'product_aliases', 'receipts', 'receipt_items',
         ];
         foreach ($names as $name) {
@@ -173,12 +195,14 @@ function tables(): array
 // Crea le tabelle mancanti e aggiunge le colonne nuove a quelle esistenti.
 // La collation utf8mb4_unicode_ci ignora maiuscole e accenti:
 // «Caffè» e «caffe» sono lo stesso piatto, e l'indice univoco lo garantisce.
+// Ogni dato ha il suo spazio (space_id): eliminando lo spazio si elimina tutto a cascata.
 function createSchema(): void
 {
     $t = tables();
     $options = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $statements = [
         "CREATE TABLE IF NOT EXISTS {$t['dishes']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             name VARCHAR(120) NOT NULL,
             category VARCHAR(20) NOT NULL DEFAULT 'altro',
@@ -187,15 +211,19 @@ function createSchema(): void
             food_groups VARCHAR(100) NULL COMMENT 'gruppi alimentari separati da virgole; NULL = riconosciuti da soli',
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
-            UNIQUE KEY uq_name (name)
+            UNIQUE KEY uq_name (space_id, name),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['weeks']} (
+            space_id INT UNSIGNED NOT NULL,
             week_start DATE NOT NULL COMMENT 'primo giorno della settimana',
             notes TEXT NOT NULL,
             updated_at DATETIME NOT NULL,
-            PRIMARY KEY (week_start)
+            PRIMARY KEY (space_id, week_start),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['meals']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             week_start DATE NOT NULL,
             day TINYINT UNSIGNED NOT NULL COMMENT '0 = lunedì ... 6 = domenica',
@@ -204,12 +232,13 @@ function createSchema(): void
             dish_id INT UNSIGNED NULL,
             dish_name VARCHAR(120) NOT NULL COMMENT 'copia del nome: resta anche se il piatto viene eliminato',
             PRIMARY KEY (id),
-            KEY idx_week (week_start, day, meal, position),
+            KEY idx_space_week (space_id, week_start, day, meal, position),
             KEY idx_dish (dish_id),
-            FOREIGN KEY (week_start) REFERENCES {$t['weeks']} (week_start) ON DELETE CASCADE,
+            FOREIGN KEY (space_id, week_start) REFERENCES {$t['weeks']} (space_id, week_start) ON DELETE CASCADE,
             FOREIGN KEY (dish_id) REFERENCES {$t['dishes']} (id) ON DELETE SET NULL
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['shopping']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             week_start DATE NOT NULL,
             position SMALLINT UNSIGNED NOT NULL,
@@ -217,38 +246,54 @@ function createSchema(): void
             category VARCHAR(20) NULL COMMENT 'reparto (frutta, verdura...): vedi SHOPPING_CATEGORIES',
             done TINYINT(1) NOT NULL DEFAULT 0,
             PRIMARY KEY (id),
-            KEY idx_week (week_start, position),
-            FOREIGN KEY (week_start) REFERENCES {$t['weeks']} (week_start) ON DELETE CASCADE
+            KEY idx_space_week (space_id, week_start, position),
+            FOREIGN KEY (space_id, week_start) REFERENCES {$t['weeks']} (space_id, week_start) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['shopping_terms']} (
+            space_id INT UNSIGNED NOT NULL,
             term VARCHAR(80) NOT NULL COMMENT 'voce della lista ripulita (minuscolo, senza quantità)',
             category VARCHAR(20) NOT NULL,
             updated_at DATETIME NOT NULL,
-            PRIMARY KEY (term)
+            PRIMARY KEY (space_id, term),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['login_attempts']} (
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             ip VARCHAR(45) NOT NULL,
+            kind VARCHAR(10) NOT NULL DEFAULT 'login' COMMENT 'login (sbagliati) | signup | reset',
             attempted_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             KEY idx_ip (ip, attempted_at)
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['settings']} (
+            space_id INT UNSIGNED NOT NULL,
             name VARCHAR(40) NOT NULL,
             value VARCHAR(200) NOT NULL,
-            PRIMARY KEY (name)
+            PRIMARY KEY (space_id, name),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['users']} (
             name VARCHAR(40) NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
+            space_id INT UNSIGNED NOT NULL,
+            email VARCHAR(" . MAX_EMAIL . ") NULL,
+            viewing_space_id INT UNSIGNED NULL COMMENT 'chi gestisce il sito: spazio che sta guardando in sola lettura',
             created_at DATETIME NOT NULL,
-            PRIMARY KEY (name)
+            last_seen_at DATETIME NULL,
+            PRIMARY KEY (name),
+            UNIQUE KEY uq_email (email),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
     ];
-    foreach (array_merge($statements, grocerySchema($t, $options), passkeySchema($t, $options)) as $sql) {
+    $all = array_merge(
+        spacesSchema($t, $options), $statements, passwordResetSchema($t, $options),
+        grocerySchema($t, $options), passkeySchema($t, $options)
+    );
+    foreach ($all as $sql) {
         db()->exec($sql);
     }
     migrateSchema();
+    migrateToSpaces();
 }
 
 function transaction(callable $fn): void
@@ -327,39 +372,6 @@ function dayDate(string $weekStart, int $day): DateTimeImmutable
 // Accesso
 // ---------------------------------------------------------------------------
 
-// Utenti abilitati: [nome => hash della password], dalla tabella degli utenti. Se è vuota
-// importa quelli del vecchio users.php, dove li salvavano le versioni precedenti.
-function users(bool $reload = false): array
-{
-    static $users = null;
-    if ($users === null || $reload) {
-        $t = tables();
-        $select = "SELECT name, password_hash FROM {$t['users']} ORDER BY name";
-        $users = db()->query($select)->fetchAll(PDO::FETCH_KEY_PAIR);
-        if (!$users && importLegacyUsers()) {
-            $users = db()->query($select)->fetchAll(PDO::FETCH_KEY_PAIR);
-        }
-    }
-    return $users;
-}
-
-function importLegacyUsers(): bool
-{
-    $file = __DIR__ . '/users.php';
-    $legacy = is_file($file) ? require $file : [];
-    if (!is_array($legacy) || !$legacy) {
-        return false;
-    }
-    $t = tables();
-    $insert = db()->prepare("INSERT IGNORE INTO {$t['users']} (name, password_hash, created_at) VALUES (?, ?, UTC_TIMESTAMP())");
-    foreach ($legacy as $name => $hash) {
-        if (is_string($hash) && preg_match(USERNAME_PATTERN, (string) $name)) {
-            $insert->execute([(string) $name, $hash]);
-        }
-    }
-    return true;
-}
-
 function validUsername($value): string
 {
     $name = is_string($value) ? strtolower(trim($value)) : '';
@@ -382,89 +394,17 @@ function validPassword($value, $repeat = null): string
     return $password;
 }
 
-// Crea l'utente; con $replace, se esiste già gli cambia la password.
-function saveUser(string $name, string $password, bool $replace = false): void
-{
-    $t = tables();
-    $hash = password_hash($password, PASSWORD_DEFAULT);
-    try {
-        db()->prepare(
-            "INSERT INTO {$t['users']} (name, password_hash, created_at) VALUES (?, ?, UTC_TIMESTAMP())"
-            . ($replace ? ' ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)' : '')
-        )->execute([$name, $hash]);
-    } catch (PDOException $e) {
-        if (!isDuplicateKey($e)) {
-            throw $e;
-        }
-        throw new HttpError(409, "Esiste già un utente chiamato «{$name}»");
-    }
-    users(true);
-}
-
-function listUsers(): array
-{
-    $t = tables();
-    $me = authToken()['user'] ?? null;
-    return array_map(function (array $row) use ($me) {
-        return ['name' => (string) $row['name'], 'createdAt' => isoDateTime($row['created_at']), 'me' => (string) $row['name'] === $me];
-    }, db()->query("SELECT name, created_at FROM {$t['users']} ORDER BY name")->fetchAll());
-}
-
-function createUser(array $input): array
-{
-    saveUser(validUsername($input['username'] ?? null), validPassword($input['password'] ?? null, $input['repeat'] ?? null));
-    return listUsers();
-}
-
-// Cambia la password dell'utente collegato, che resta collegato su questo dispositivo
-// (sugli altri deve rifare l'accesso, perché la firma del cookie include l'hash).
-function changePassword(array $input): array
-{
-    $auth = authToken();
-    $current = is_string($input['current'] ?? null) ? $input['current'] : '';
-    if (!password_verify($current, users()[$auth['user']])) {
-        throw new HttpError(400, 'La password attuale non è corretta');
-    }
-    saveUser($auth['user'], validPassword($input['password'] ?? null, $input['repeat'] ?? null), true);
-    setAuthCookie($auth['user'], $auth['remember']);
-    return ['ok' => true];
-}
-
-function deleteUser(array $input): array
-{
-    $t = tables();
-    $name = is_string($input['username'] ?? null) ? $input['username'] : '';
-    if (count(users()) <= 1) {
-        throw new HttpError(400, "Non puoi eliminare l'ultimo utente: nessuno potrebbe più accedere");
-    }
-    $stmt = db()->prepare("DELETE FROM {$t['users']} WHERE name = ?");
-    $stmt->execute([$name]);
-    if ($stmt->rowCount() === 0) {
-        throw new HttpError(404, 'Utente non trovato');
-    }
-    users(true);
-    return listUsers();
-}
-
 // Tentativi di accesso sbagliati dallo stesso indirizzo (login e setup.php): oltre il limite si blocca.
 function checkAttempts(string $ip): void
 {
-    $t = tables();
-    $stmt = db()->prepare(
-        "SELECT COUNT(*) FROM {$t['login_attempts']}
-         WHERE ip = ? AND attempted_at > UTC_TIMESTAMP() - INTERVAL " . LOGIN_WINDOW_MINUTES . ' MINUTE'
-    );
-    $stmt->execute([$ip]);
-    if ((int) $stmt->fetchColumn() >= LOGIN_MAX_FAILURES) {
+    if (countAttempts($ip, 'login', LOGIN_WINDOW_MINUTES) >= LOGIN_MAX_FAILURES) {
         throw new HttpError(429, 'Troppi tentativi sbagliati: riprova tra qualche minuto');
     }
 }
 
 function recordFailedAttempt(string $ip): void
 {
-    $t = tables();
-    db()->prepare("INSERT INTO {$t['login_attempts']} (ip, attempted_at) VALUES (?, UTC_TIMESTAMP())")->execute([$ip]);
-    db()->exec("DELETE FROM {$t['login_attempts']} WHERE attempted_at < UTC_TIMESTAMP() - INTERVAL 1 DAY");
+    recordAttempt($ip, 'login');
 }
 
 function secret(): string
@@ -480,7 +420,7 @@ function secret(): string
 // include l'hash della password, quindi cambiandola si scollegano tutti i dispositivi.
 function tokenSignature(string $payload, string $user): string
 {
-    return hash_hmac('sha256', $payload, secret() . users()[$user]);
+    return hash_hmac('sha256', $payload, secret() . (findUser($user)['password_hash'] ?? ''));
 }
 
 // Utente collegato secondo il cookie: ['user' => ..., 'remember' => bool] oppure null.
@@ -496,7 +436,7 @@ function authToken(): ?array
         return null;
     }
     [$user, $expires, $remember] = explode('|', $payload);
-    if (!isset(users()[$user]) || (int) $expires < time() || !hash_equals(tokenSignature($payload, $user), $signature)) {
+    if (findUser($user) === null || (int) $expires < time() || !hash_equals(tokenSignature($payload, $user), $signature)) {
         return null;
     }
     return ['user' => $user, 'remember' => $remember === '1'];
@@ -535,25 +475,29 @@ function login(array $input): array
     $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
     checkAttempts($ip);
 
-    $hash = users()[$username] ?? null;
+    $hash = $username === '' ? null : (findUser($username)['password_hash'] ?? null);
     if (!password_verify($password, $hash ?? DUMMY_HASH) || $hash === null) {
         recordFailedAttempt($ip);
-        throw users()
-            ? new HttpError(401, 'Nome utente o password non corretti')
-            : new HttpError(401, 'Non c\'è ancora nessun utente: crea il primo dalla pagina setup.php', ['needsSetup' => true]);
+        throw new HttpError(401, 'Nome utente o password non corretti');
     }
 
-    db()->prepare("DELETE FROM {$t['login_attempts']} WHERE ip = ?")->execute([$ip]);
-    setAuthCookie($username, !empty($input['remember']));
-    return ['user' => $username, 'weekStartDay' => weekStartDay()];
+    db()->prepare("DELETE FROM {$t['login_attempts']} WHERE ip = ? AND kind = 'login'")->execute([$ip]);
+    return signIn($username, !empty($input['remember']));
+}
+
+// Risposta 401: se non c'è ancora nessun utente, il browser propone anche setup.php.
+function authRequired(): HttpError
+{
+    return new HttpError(401, 'Accesso richiesto', userCount() ? [] : ['needsSetup' => true]);
 }
 
 // ---------------------------------------------------------------------------
 // Piatti
 // ---------------------------------------------------------------------------
 
-// Ogni piatto con quante volte compare nelle settimane salvate, l'ultima data e la ricetta.
-function selectDishes(string $where = '', array $params = []): array
+// I piatti dello spazio con quante volte compaiono nelle settimane salvate, l'ultima data e la
+// ricetta. $and: altre condizioni (es. 'AND d.id = ?').
+function selectDishes(string $and = '', array $params = []): array
 {
     $t = tables();
     $stmt = db()->prepare(
@@ -568,10 +512,10 @@ function selectDishes(string $where = '', array $params = []): array
              WHERE dish_id IS NOT NULL
              GROUP BY dish_id
          ) s ON s.dish_id = d.id
-         $where
+         WHERE d.space_id = ? $and
          ORDER BY d.name"
     );
-    $stmt->execute($params);
+    $stmt->execute(array_merge([spaceId()], $params));
     return attachRecipes(array_map(function (array $row) {
         return [
             'id' => (string) $row['id'],
@@ -590,7 +534,7 @@ function selectDishes(string $where = '', array $params = []): array
 
 function findDish(int $id): array
 {
-    $dishes = selectDishes('WHERE d.id = ?', [$id]);
+    $dishes = selectDishes('AND d.id = ?', [$id]);
     if (!$dishes) {
         throw new HttpError(404, 'Piatto non trovato');
     }
@@ -626,8 +570,8 @@ function parseFoodGroups($value): ?string
 function assertNameAvailable(string $name, int $exceptId = 0): void
 {
     $t = tables();
-    $stmt = db()->prepare("SELECT name FROM {$t['dishes']} WHERE name = ? AND id <> ? LIMIT 1");
-    $stmt->execute([$name, $exceptId]);
+    $stmt = db()->prepare("SELECT name FROM {$t['dishes']} WHERE space_id = ? AND name = ? AND id <> ? LIMIT 1");
+    $stmt->execute([spaceId(), $name, $exceptId]);
     $clash = $stmt->fetchColumn();
     if ($clash !== false) {
         throw new HttpError(409, "Hai già un piatto chiamato «{$clash}»");
@@ -640,8 +584,8 @@ function createDish(array $input): array
     $dish = parseDish($input);
     assertNameAvailable($dish['name']);
     try {
-        db()->prepare("INSERT INTO {$t['dishes']} (name, category, notes, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP())")
-            ->execute([$dish['name'], $dish['category'], $dish['notes']]);
+        db()->prepare("INSERT INTO {$t['dishes']} (space_id, name, category, notes, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP())")
+            ->execute([spaceId(), $dish['name'], $dish['category'], $dish['notes']]);
     } catch (PDOException $e) {
         if (isDuplicateKey($e)) {
             throw new HttpError(409, "Hai già un piatto chiamato «{$dish['name']}»");
@@ -654,7 +598,7 @@ function createDish(array $input): array
 function updateDish(int $id, array $input): array
 {
     $t = tables();
-    $current = findDish($id);
+    $current = findDish($id); // 404 se il piatto non è di questo spazio
     $dish = parseDish($input);
     assertNameAvailable($dish['name'], $id);
     // Senza foodGroups (es. da una pagina vecchia ancora aperta) i gruppi restano quelli che sono.
@@ -662,8 +606,8 @@ function updateDish(int $id, array $input): array
         ? parseFoodGroups($input['foodGroups'])
         : ($current['foodGroups'] === null ? null : implode(',', $current['foodGroups']));
     transaction(function (PDO $pdo) use ($t, $id, $dish, $groups) {
-        $pdo->prepare("UPDATE {$t['dishes']} SET name = ?, category = ?, notes = ?, food_groups = ? WHERE id = ?")
-            ->execute([$dish['name'], $dish['category'], $dish['notes'], $groups, $id]);
+        $pdo->prepare("UPDATE {$t['dishes']} SET name = ?, category = ?, notes = ?, food_groups = ? WHERE id = ? AND space_id = ?")
+            ->execute([$dish['name'], $dish['category'], $dish['notes'], $groups, $id, spaceId()]);
         // Il nuovo nome finisce anche nelle copie salvate nelle settimane, così lo
         // storico mostra il nome più recente anche se un giorno il piatto viene eliminato.
         $pdo->prepare("UPDATE {$t['meals']} SET dish_name = ? WHERE dish_id = ?")
@@ -675,8 +619,8 @@ function updateDish(int $id, array $input): array
 function deleteDish(int $id): void
 {
     $t = tables();
-    $stmt = db()->prepare("DELETE FROM {$t['dishes']} WHERE id = ?");
-    $stmt->execute([$id]);
+    $stmt = db()->prepare("DELETE FROM {$t['dishes']} WHERE id = ? AND space_id = ?");
+    $stmt->execute([$id, spaceId()]);
     if ($stmt->rowCount() === 0) {
         throw new HttpError(404, 'Piatto non trovato');
     }
@@ -692,7 +636,9 @@ function deleteDish(int $id): void
 function weekStartDay(): int
 {
     $t = tables();
-    $value = db()->query("SELECT value FROM {$t['settings']} WHERE name = 'week_start_day'")->fetchColumn();
+    $stmt = db()->prepare("SELECT value FROM {$t['settings']} WHERE space_id = ? AND name = 'week_start_day'");
+    $stmt->execute([spaceId()]);
+    $value = $stmt->fetchColumn();
     return is_string($value) && preg_match('/^[0-6]$/', $value) ? (int) $value : 0;
 }
 
@@ -707,13 +653,15 @@ function changeWeekStart(array $input): array
     if ($day !== weekStartDay()) {
         transaction(function (PDO $pdo) use ($t, $day) {
             $weeks = regroupWeeks(loadWeeks(), $day);
-            $pdo->exec("DELETE FROM {$t['weeks']}"); // pasti e liste della spesa vanno via a cascata
+            // Pasti e liste della spesa vanno via a cascata.
+            $pdo->prepare("DELETE FROM {$t['weeks']} WHERE space_id = ?")->execute([spaceId()]);
             foreach ($weeks as $key => $week) {
                 writeWeek($pdo, (string) $key, $week);
             }
             $pdo->prepare(
-                "INSERT INTO {$t['settings']} (name, value) VALUES ('week_start_day', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)"
-            )->execute([(string) $day]);
+                "INSERT INTO {$t['settings']} (space_id, name, value) VALUES (?, 'week_start_day', ?)
+                 ON DUPLICATE KEY UPDATE value = VALUES(value)"
+            )->execute([spaceId(), (string) $day]);
         });
     }
     return ['weekStartDay' => weekStartDay()];
@@ -761,12 +709,12 @@ function emptyWeek(string $key): array
     return ['week' => $key, 'meals' => $meals, 'notes' => '', 'shopping' => [], 'updatedAt' => null];
 }
 
-// Tutte le settimane salvate (o solo $key), dalla più recente: tre query in tutto.
+// Tutte le settimane salvate dello spazio (o solo $key), dalla più recente: tre query in tutto.
 function loadWeeks(?string $key = null): array
 {
     $t = tables();
-    $filter = $key === null ? '' : 'WHERE week_start = ?';
-    $params = $key === null ? [] : [$key];
+    $filter = 'WHERE space_id = ?' . ($key === null ? '' : ' AND week_start = ?');
+    $params = $key === null ? [spaceId()] : [spaceId(), $key];
 
     $weeks = [];
     $stmt = db()->prepare("SELECT week_start, notes, updated_at FROM {$t['weeks']} $filter ORDER BY week_start DESC");
@@ -785,7 +733,7 @@ function loadWeeks(?string $key = null): array
         "SELECT m.week_start, m.day, m.meal, m.dish_id, COALESCE(d.name, m.dish_name) AS name
          FROM {$t['meals']} m
          LEFT JOIN {$t['dishes']} d ON d.id = m.dish_id
-         " . ($key === null ? '' : 'WHERE m.week_start = ?') . "
+         WHERE m.space_id = ?" . ($key === null ? '' : ' AND m.week_start = ?') . "
          ORDER BY m.week_start, m.day, m.meal, m.position"
     );
     $stmt->execute($params);
@@ -874,7 +822,10 @@ function isEmptyWeek(array $week): bool
 function saveWeek(string $key, array $input): array
 {
     $t = tables();
-    $dishNames = db()->query("SELECT id, name FROM {$t['dishes']}")->fetchAll(PDO::FETCH_KEY_PAIR);
+    // Solo i piatti di questo spazio: un id di un altro spazio diventa un piatto senza id.
+    $stmt = db()->prepare("SELECT id, name FROM {$t['dishes']} WHERE space_id = ?");
+    $stmt->execute([spaceId()]);
+    $dishNames = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
     $week = normalizeWeek($input, $dishNames);
 
     transaction(function (PDO $pdo) use ($key, $week) {
@@ -889,29 +840,30 @@ function saveWeek(string $key, array $input): array
 function writeWeek(PDO $pdo, string $key, array $week): void
 {
     $t = tables();
-    $pdo->prepare("DELETE FROM {$t['weeks']} WHERE week_start = ?")->execute([$key]);
+    $space = spaceId();
+    $pdo->prepare("DELETE FROM {$t['weeks']} WHERE space_id = ? AND week_start = ?")->execute([$space, $key]);
     if (isEmptyWeek($week)) {
         return;
     }
-    $pdo->prepare("INSERT INTO {$t['weeks']} (week_start, notes, updated_at) VALUES (?, ?, UTC_TIMESTAMP())")
-        ->execute([$key, $week['notes']]);
+    $pdo->prepare("INSERT INTO {$t['weeks']} (space_id, week_start, notes, updated_at) VALUES (?, ?, ?, UTC_TIMESTAMP())")
+        ->execute([$space, $key, $week['notes']]);
 
     $insertMeal = $pdo->prepare(
-        "INSERT INTO {$t['meals']} (week_start, day, meal, position, dish_id, dish_name) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO {$t['meals']} (space_id, week_start, day, meal, position, dish_id, dish_name) VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
     foreach (DAYS as $dayIndex => $day) {
         foreach (MEALS as $meal) {
             foreach ($week['meals'][$day][$meal] as $position => $entry) {
-                $insertMeal->execute([$key, $dayIndex, $meal, $position, $entry['dishId'], $entry['name']]);
+                $insertMeal->execute([$space, $key, $dayIndex, $meal, $position, $entry['dishId'], $entry['name']]);
             }
         }
     }
 
     $insertItem = $pdo->prepare(
-        "INSERT INTO {$t['shopping']} (week_start, position, text, category, done) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO {$t['shopping']} (space_id, week_start, position, text, category, done) VALUES (?, ?, ?, ?, ?, ?)"
     );
     foreach ($week['shopping'] as $position => $item) {
-        $insertItem->execute([$key, $position, $item['text'], $item['category'] ?? null, $item['done'] ? 1 : 0]);
+        $insertItem->execute([$space, $key, $position, $item['text'], $item['category'] ?? null, $item['done'] ? 1 : 0]);
     }
 }
 
@@ -919,7 +871,9 @@ function writeWeek(PDO $pdo, string $key, array $week): void
 function shoppingTerms(): object
 {
     $t = tables();
-    return (object) db()->query("SELECT term, category FROM {$t['shopping_terms']}")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $stmt = db()->prepare("SELECT term, category FROM {$t['shopping_terms']} WHERE space_id = ?");
+    $stmt->execute([spaceId()]);
+    return (object) $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 }
 
 // Ricorda il reparto scelto spostando una voce: la prossima volta finisce lì da sola.
@@ -933,9 +887,9 @@ function saveShoppingTerm(array $input): array
         throw new HttpError(400, 'Voce o reparto non validi');
     }
     db()->prepare(
-        "INSERT INTO {$t['shopping_terms']} (term, category, updated_at) VALUES (?, ?, UTC_TIMESTAMP())
+        "INSERT INTO {$t['shopping_terms']} (space_id, term, category, updated_at) VALUES (?, ?, ?, UTC_TIMESTAMP())
          ON DUPLICATE KEY UPDATE category = VALUES(category), updated_at = VALUES(updated_at)"
-    )->execute([strtolower($term), $category]);
+    )->execute([spaceId(), strtolower($term), $category]);
     return ['ok' => true];
 }
 
@@ -998,14 +952,10 @@ if (defined('WFP_LIBRARY')) {
     return;
 }
 
-// Risposta 401: se non c'è ancora nessun utente, il browser propone setup.php.
-function authRequired(): HttpError
-{
-    return new HttpError(401, 'Accesso richiesto', users() ? [] : ['needsSetup' => true]);
-}
-
 // azione => [metodo, stato HTTP, gestore]. Tutte richiedono l'accesso tranne quelle in PUBLIC_ACTIONS.
-const PUBLIC_ACTIONS = ['login', 'logout', 'me', 'passkey-login-options', 'passkey-login'];
+const PUBLIC_ACTIONS = [
+    'login', 'logout', 'me', 'passkey-login-options', 'passkey-login', 'signup', 'password-forgot', 'password-reset',
+];
 
 $routes = [
     'login' => ['POST', 200, function () {
@@ -1021,7 +971,17 @@ $routes = [
             throw authRequired();
         }
         setAuthCookie($auth['user'], $auth['remember']); // rinnova la scadenza
-        return ['user' => $auth['user'], 'weekStartDay' => weekStartDay()];
+        touchUser($auth['user']);
+        return meData();
+    }],
+    'signup' => ['POST', 201, function () {
+        return signup(readJson());
+    }],
+    'password-forgot' => ['POST', 200, function () {
+        return forgotPassword(readJson());
+    }],
+    'password-reset' => ['POST', 200, function () {
+        return resetPassword(readJson());
     }],
     'passkey-login-options' => ['POST', 200, function () {
         return passkeyLoginOptions();
@@ -1050,8 +1010,53 @@ $routes = [
     'user-password' => ['POST', 200, function () {
         return changePassword(readJson());
     }],
+    'user-reset' => ['POST', 200, function () {
+        return resetMemberPassword(readJson());
+    }],
     'user-delete' => ['POST', 200, function () {
         return deleteUser(readJson());
+    }],
+    'account-update' => ['POST', 200, function () {
+        return updateAccount(readJson());
+    }],
+    'space-update' => ['POST', 200, function () {
+        return renameSpace(readJson());
+    }],
+    'space-delete' => ['POST', 200, function () {
+        return deleteSpace(readJson());
+    }],
+    'admin-overview' => ['GET', 200, function () {
+        return adminOverview();
+    }],
+    'admin-space' => ['GET', 200, function () {
+        return adminSpace(idParam());
+    }],
+    'admin-space-create' => ['POST', 201, function () {
+        return adminCreateSpace(readJson());
+    }],
+    'admin-space-update' => ['POST', 200, function () {
+        return adminRenameSpace(readJson());
+    }],
+    'admin-space-suspend' => ['POST', 200, function () {
+        return adminSuspendSpace(readJson());
+    }],
+    'admin-space-delete' => ['POST', 200, function () {
+        return adminDeleteSpace(readJson());
+    }],
+    'admin-user-create' => ['POST', 201, function () {
+        return adminCreateUser(readJson());
+    }],
+    'admin-user-reset' => ['POST', 200, function () {
+        return adminResetUser(readJson());
+    }],
+    'admin-user-delete' => ['POST', 200, function () {
+        return adminDeleteUser(readJson());
+    }],
+    'admin-space-view' => ['POST', 200, function () {
+        return adminViewSpace(readJson());
+    }],
+    'view-stop' => ['POST', 200, function () {
+        return stopViewing();
     }],
     'settings-save' => ['POST', 200, function () {
         return changeWeekStart(readJson());
@@ -1149,9 +1154,21 @@ try {
     if ($method === 'POST' && stripos((string) ($_SERVER['CONTENT_TYPE'] ?? ''), 'application/json') !== 0) {
         throw new HttpError(415, 'Le richieste devono essere in JSON');
     }
-    $run = function () use ($action, $handler) {
-        if (!in_array($action, PUBLIC_ACTIONS, true) && authToken() === null) {
-            throw authRequired();
+    $run = function () use ($action, $method, $handler) {
+        $user = currentUser();
+        // Spazio sospeso: si esce subito, con il motivo.
+        if ($user !== null && $user['suspended_at'] !== null && $action !== 'logout') {
+            sendAuthCookie('', time() - 3600);
+            throw new HttpError(401, suspendedMessage(), ['suspended' => true]);
+        }
+        if (!in_array($action, PUBLIC_ACTIONS, true)) {
+            if ($user === null) {
+                throw authRequired();
+            }
+            // Chi guarda lo spazio di un altro non cambia niente: può solo gestire il sito o tornare al suo.
+            if ($method === 'POST' && viewingSpace() !== null && $action !== 'view-stop' && strpos($action, 'admin-') !== 0) {
+                throw new HttpError(403, 'Sola lettura: stai guardando lo spazio di qualcun altro. Torna al tuo per modificare');
+            }
         }
         return $handler();
     };

@@ -1245,6 +1245,72 @@ select.input {
 .user-form .btn { align-self: flex-start; }
 .user-form .muted { margin: 0; font-size: 13px; }
 
+.user-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.user-reset-form { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.user-reset-form .input { flex: 1 1 180px; height: 36px; }
+.admin-space .user-row-name small { display: block; font-weight: 400; font-size: 13px; }
+
+.space-form { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 16px; padding: 14px 16px; }
+.space-form .field { flex: 1; }
+.space-form .btn { height: 40px; }
+
+.space-delete { margin-top: 28px; padding-top: 16px; border-top: 1px dashed var(--rule-strong); text-align: left; }
+.space-delete .muted { margin: 0 0 10px; font-size: 13px; }
+.space-delete-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.space-delete-form .input { width: min(260px, 100%); height: 36px; }
+
+/* Gestione del sito */
+.admin-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+select.admin-sort { flex: none; width: auto; }
+.admin-create { margin-bottom: 16px; }
+.admin-create[hidden] { display: none; }
+.admin-create-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.admin-user-form { margin-top: 16px; }
+.admin-space .user-row-name a { color: var(--ink); text-decoration: none; }
+.admin-space .user-row-name a:hover { color: var(--accent); }
+.admin-space .tag { margin-left: 6px; }
+.admin-space-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px;
+  margin-bottom: 16px; padding: 14px 16px; }
+.admin-space-head .space-form { flex: 1 1 320px; margin: 0; padding: 0; }
+.admin-space-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.admin-suspended { color: var(--accent); }
+
+/* Chi gestisce il sito sta guardando lo spazio di un altro. */
+.view-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 16px;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 10px 24px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.view-banner[hidden] { display: none; }
+
+/* Iscrizione e recupero della password */
+.login { gap: 16px; align-content: center; }
+.login-links { margin: 0; text-align: center; font-size: 14px; }
+.login-signup h2 { margin: 0; font-size: 18px; }
+.login-signup p { margin: 0; color: var(--ink-2); font-size: 14px; }
+.login-card .muted { margin: 0; font-size: 13px; }
+.login-card .field i { font-style: normal; font-weight: 400; color: var(--ink-3); }
+
+/* Campo trappola per i bot: invisibile alle persone. */
+.trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+/* Informativa sulla privacy (privacy.php) */
+.privacy { max-width: 760px; padding: 24px 28px; }
+.privacy h1 { margin: 0; font-family: var(--font-hand); font-size: 46px; line-height: 1; }
+.privacy h2 { margin: 22px 0 6px; font-size: 18px; }
+.privacy p, .privacy li { color: var(--ink-2); line-height: 1.55; }
+.privacy ul { margin: 0; padding-left: 20px; }
+
 .passkey-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
 .passkey-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .passkey-row > span { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
@@ -1856,6 +1922,10 @@ ul.notice { padding-left: 32px; }
   .user-name .ico { display: inline-block; }
   .user-name-text { display: none; }
   .user-forms { grid-template-columns: minmax(0, 1fr); }
+  .user-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .user-row > .muted { grid-column: 1 / -1; grid-row: 2; font-size: 13px; }
+  .space-form { flex-wrap: wrap; }
+  .privacy { padding: 18px 16px; }
   .app { padding: 12px 16px 40px; }
 
   .week-toolbar { gap: 10px; }
@@ -1927,6 +1997,7 @@ ul.notice { padding-left: 32px; }
   .week-start,
   .week-score,
   .week-grade,
+  .view-banner,
   .today-badge,
   .toast { display: none !important; }
 

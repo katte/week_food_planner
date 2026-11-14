@@ -3,6 +3,10 @@ public/config.php
 public/users.php
 deploy_config.ini
 .deploy_state.json
+# Altre copie del sito (es. quella di prova): il loro INI e il loro config.php
+deploy_*.ini
+!deploy_config.sample.ini
+config.*.php
 
 # Impostazioni locali degli strumenti di sviluppo
 .claude/

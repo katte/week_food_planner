@@ -8,13 +8,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=20261030h">
-  <script src="app.js?v=20261030h" defer></script>
-  <script src="shopping.js?v=20261030h" defer></script>
-  <script src="nutrition.js?v=20261030h" defer></script>
-  <script src="recipes.js?v=20261030h" defer></script>
-  <script src="groceries.js?v=20261030h" defer></script>
-  <script src="users.js?v=20261030h" defer></script>
+  <link rel="stylesheet" href="styles.css?v=20261114b">
+  <script src="app.js?v=20261114b" defer></script>
+  <script src="shopping.js?v=20261114b" defer></script>
+  <script src="nutrition.js?v=20261114b" defer></script>
+  <script src="recipes.js?v=20261114b" defer></script>
+  <script src="groceries.js?v=20261114b" defer></script>
+  <script src="users.js?v=20261114b" defer></script>
 </head>
 <body class="is-locked">
   <header class="site-header">
@@ -40,6 +40,11 @@
       <button type="button" class="btn btn-sm btn-ghost" id="logout-btn">Esci</button>
     </div>
   </header>
+
+  <div id="view-banner" class="view-banner" role="status" hidden>
+    <span>Stai guardando lo spazio <b id="view-banner-name"></b> in sola lettura: le modifiche non vengono salvate.</span>
+    <button type="button" class="btn btn-sm" id="view-stop">Torna al tuo spazio</button>
+  </div>
 
   <main id="app" class="app" tabindex="-1">
     <p class="loading">Caricamento…</p>

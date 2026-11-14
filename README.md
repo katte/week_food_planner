@@ -4,6 +4,8 @@ Web app per pianificare pranzi e cene della settimana partendo dai piatti che sa
 
 PHP + MySQL sul server, JavaScript senza framework né build nel browser: gira su un normale hosting condiviso.
 
+Chiunque può iscriversi e avere il suo **spazio** (una famiglia, un gruppo, una persona sola), con i suoi piatti, settimane, spese e scontrini, e aggiungervi le persone con cui condividerlo.
+
 ## Funzioni
 
 - **Settimana**: tabellone con pranzo e cena dei 7 giorni, note e lista della spesa, stampabile in A4. Il giorno di inizio è configurabile (es. sabato, se fai la spesa il sabato).
@@ -12,7 +14,8 @@ PHP + MySQL sul server, JavaScript senza framework né build nel browser: gira s
 - **Piatti**: i piatti che sai fare, con ricetta, porzioni e costo totale e a porzione. Sotto ogni ingrediente della ricetta c'è il prezzo usato e l'acquisto da cui viene; dal nome si apre una scheda per correggerlo al volo (formato o prezzo al kg degli articoli, gruppo alimentare). Un avviso segnala gli ingredienti che non hanno ancora un prezzo.
 - **Spesa**: scontrini letti da un'AI (foto → JSON con il prompt incluso), articoli con lo storico dei prezzi al kg, al litro o al pezzo, ingredienti collegati alle ricette.
 - **Storico**: le settimane passate, con ricerca per piatto.
-- **Utenti**: accesso con password o con **passkey** (impronta, volto o PIN del dispositivo), registrata dalla pagina Utenti. I dati sono condivisi da tutti gli utenti (pensato per una famiglia).
+- **Spazi e utenti**: iscrizione libera, che crea uno spazio con il suo primo utente; dalla pagina dello spazio si aggiungono altre persone, si sceglie una nuova password per chi l'ha dimenticata, si elimina lo spazio con tutti i dati. Accesso con password o con **passkey** (impronta, volto o PIN del dispositivo). Con un'email facoltativa si riceve il link per una nuova password.
+- **Gestione** (solo per chi è in `admins` di `config.php`): riepilogo del sito (spazi, utenti, nuove iscrizioni, spazi attivi), elenco degli spazi con ricerca e ordinamento, creazione di uno spazio con il suo primo utente, e per ogni spazio una scheda con utenti, email, ultimo accesso e numeri, da cui rinominarlo, sospenderlo (nessuno può entrare, i dati restano), eliminarlo, aggiungere o togliere utenti, dare una nuova password, e aprirlo **in sola lettura** per aiutare chi ha un problema (il server rifiuta ogni modifica finché non si torna al proprio spazio).
 
 ## Requisiti
 
@@ -20,13 +23,17 @@ PHP 7.4+ con `pdo_mysql` (e `openssl` per le passkey), MySQL o MariaDB, Apache (
 
 ## Installazione
 
-1. Copia `public/config.example.php` in `public/config.php` e inserisci i dati del database e `secret`, una stringa casuale di almeno 32 caratteri (es. `php -r "echo bin2hex(random_bytes(32));"`).
+1. Copia `public/config.example.php` in `public/config.php` e inserisci i dati del database, `secret` (una stringa casuale di almeno 32 caratteri, es. `php -r "echo bin2hex(random_bytes(32));"`), il tuo nome utente in `admins`, il mittente delle email (`mail_from`, un indirizzo del dominio del sito) e il contatto per l'informativa sulla privacy (`contact`).
 2. Pubblica il contenuto di `public/`.
-3. Apri `setup.php`: controlla la configurazione, crea le tabelle e il primo utente (chiede la `secret`). Gli altri utenti si aggiungono dalla pagina **Utenti**.
+3. Apri `setup.php`: controlla la configurazione, crea le tabelle e il tuo spazio con il primo utente (chiede la `secret`). Gli altri si iscrivono dal sito.
 
-`setup.php` serve anche a reimpostare una password dimenticata. Le tabelle vengono comunque create e aggiornate da sole alla prima richiesta, con il prefisso scelto in `config.php`.
+`setup.php` serve anche a reimpostare la password di qualunque utente. Le tabelle vengono comunque create e aggiornate da sole alla prima richiesta, con il prefisso scelto in `config.php`; i dati di una versione precedente, senza spazi, diventano lo spazio del primo utente. `privacy.php` è una traccia di informativa: va adattata a chi gestisce il sito.
 
-`deploy.py` (facoltativo) pubblica via FTP solo i file modificati, con la configurazione in `deploy_config.ini` (modello: `deploy_config.sample.ini`).
+`deploy.py` (facoltativo) pubblica via FTP solo i file modificati, con la configurazione in `deploy_config.ini` (modello: `deploy_config.sample.ini`). Per una copia di prova, con un altro database, basta un secondo INI con un altro `remote_dir` e `site_config` (il `config.php` di quella copia): `python deploy.py -c deploy_test.ini`.
+
+## Test
+
+`python tests/isolation_test.py https://tuosito/cartella-di-prova/` iscrive due spazi, riempie il primo di dati e controlla che il secondo non possa né vederli né toccarli, neppure indicandone gli id; alla fine li elimina. Da lanciare solo su una copia di prova, alzando `signups_per_hour` nel suo `config.php`.
 
 ## Scontrini e costi
 
@@ -47,20 +54,25 @@ public/                 il sito da pubblicare
   nutrition.js          pagella della settimana: gruppi alimentari e frequenze
   recipes.js            ricette e costi
   groceries.js          scontrini, articoli, ingredienti
-  users.js              utenti e passkey
-  api.php               API JSON (lib/groceries.php: spesa e costi; lib/passkeys.php: passkey)
+  users.js              spazio, utenti, iscrizione, recupero password, passkey, gestione
+  api.php               API JSON (lib/spaces.php: spazi e utenti; lib/groceries.php: spesa e costi;
+                        lib/passkeys.php: passkey)
   setup.php             configurazione iniziale e reset delle password
+  privacy.php           informativa sulla privacy
   prompt-scontrino.txt  prompt per l'AI
+tests/isolation_test.py controllo che gli spazi non vedano i dati degli altri
 deploy.py               pubblicazione via FTP (facoltativa)
 ```
 
 ## Sicurezza
 
-Password salvate con `password_hash`, cookie di accesso firmati (HMAC con `secret`), blocco temporaneo dopo 10 tentativi sbagliati, `config.php` non raggiungibile dal browser, sito sempre in https. Non c'è registrazione pubblica: i nuovi utenti li crea chi ha già accesso.
+Password salvate con `password_hash`, cookie di accesso firmati (HMAC con `secret`), blocco temporaneo dopo 10 tentativi sbagliati, `config.php` non raggiungibile dal browser, sito sempre in https.
+
+Ogni dato appartiene a uno spazio e ogni query filtra per lo spazio di chi è collegato: gli id di un altro spazio danno 404. Eliminando uno spazio si cancella tutto a cascata. Iscrizioni limitate per indirizzo IP e al giorno, con un campo trappola per i bot; i link per una nuova password valgono un'ora e una volta sola (nel database c'è solo il loro hash), e la risposta non rivela quali utenti o email esistono.
 
 Passkey (WebAuthn) verificate dal server senza librerie esterne: chiavi ES256 e RS256, sfide monouso valide 5 minuti, controllo di sito, origine e contatore delle firme.
 
-`config.php`, `deploy_config.ini` e `.deploy_state.json` sono esclusi da git.
+`config.php`, `deploy_config.ini`, `.deploy_state.json` e i file delle altre copie (`deploy_*.ini`, `config.*.php`) sono esclusi da git.
 
 ## Licenza
 

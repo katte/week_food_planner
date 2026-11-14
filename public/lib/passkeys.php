@@ -407,6 +407,5 @@ function loginWithPasskey(array $input): array
     }
     db()->prepare("UPDATE {$t['passkeys']} SET sign_count = ?, last_used_at = ? WHERE id = ?")
         ->execute([$auth['signCount'], utcNow(), $id]);
-    setAuthCookie($passkey['user_name'], !empty($input['remember']));
-    return ['user' => $passkey['user_name'], 'weekStartDay' => weekStartDay()];
+    return signIn($passkey['user_name'], !empty($input['remember']));
 }

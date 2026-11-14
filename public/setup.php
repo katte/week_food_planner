@@ -1,9 +1,9 @@
 <?php
 /*
  * Configurazione iniziale: controlla PHP, config.php e database, crea o aggiorna le
- * tabelle e crea il primo utente. Serve anche a reimpostare la password di un utente che
- * l'ha dimenticata. Creare o reimpostare chiede la chiave 'secret' di config.php: può
- * farlo solo chi ha accesso ai file del sito.
+ * tabelle e crea il primo spazio con il primo utente (gli altri si iscrivono dal sito).
+ * Serve anche a reimpostare la password di qualunque utente. Creare o reimpostare chiede
+ * la chiave 'secret' di config.php: può farlo solo chi ha accesso ai file del sito.
  */
 
 declare(strict_types=1);
@@ -59,7 +59,7 @@ $ready = check('PHP', function () {
         return 'collegato; tabelle create o aggiornate (prefisso «' . (config()['db']['prefix'] ?? 'menu_') . '»)';
     }, $checks)
     && check('Utenti', function () {
-        $n = count(users());
+        $n = userCount();
         return $n ? ($n === 1 ? '1 utente' : "$n utenti") : 'nessuno: crea il primo qui sotto';
     }, $checks);
 
@@ -71,7 +71,7 @@ check('Estensione openssl (passkey)', function () {
     return 'attiva';
 }, $checks);
 
-$hasUsers = $ready && users();
+$hasUsers = $ready && userCount() > 0;
 $message = '';
 $error = '';
 $form = ['username' => ''];
@@ -88,15 +88,18 @@ if ($ready && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $name = validUsername($form['username']);
         $password = validPassword($_POST['password'] ?? null, $_POST['repeat'] ?? null);
         if ($hasUsers) {
-            if (!isset(users()[$name])) {
+            if (findUser($name, true) === null) {
                 throw new HttpError(404, "Non c'è nessun utente chiamato «{$name}»");
             }
-            saveUser($name, $password, true);
+            setPassword($name, $password);
             $message = "Password di «{$name}» reimpostata: ora puoi accedere con quella nuova.";
         } else {
-            saveUser($name, $password);
+            transaction(function () use ($name, $password) {
+                insertUser($name, $password, createSpace("Spazio di $name"));
+            });
             setAuthCookie($name, false);
-            $message = "Utente «{$name}» creato: sei già collegato. Gli altri utenti si aggiungono dal sito, nella pagina Utenti.";
+            $message = "Utente «{$name}» creato, con il suo spazio: sei già collegato. Per gestire il sito "
+                . "(vedere e togliere gli spazi degli iscritti) aggiungi «{$name}» in 'admins' di config.php.";
             $hasUsers = true;
         }
         $form['username'] = '';
@@ -151,8 +154,8 @@ if ($ready && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
           <form method="post" class="setup-form" autocomplete="off">
             <h2><?= $hasUsers ? 'Reimposta una password' : 'Crea il primo utente' ?></h2>
             <p class="lead"><?= $hasUsers
-                ? 'Se un utente ha dimenticato la password, puoi sceglierne una nuova.'
-                : 'Gli altri utenti potrai aggiungerli dal sito, nella pagina Utenti.' ?></p>
+                ? 'Se un utente ha dimenticato la password e non ha un\'email per riceverne una nuova, puoi sceglierne una qui.'
+                : 'Gli altri potranno iscriversi dal sito, o li aggiungerai al tuo spazio dalla pagina Utenti.' ?></p>
             <label class="field"><span>Chiave segreta</span>
               <input name="secret" type="password" required autocomplete="off" placeholder="il valore di 'secret' in config.php"></label>
             <label class="field"><span>Nome utente</span>

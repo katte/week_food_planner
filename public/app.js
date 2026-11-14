@@ -54,6 +54,10 @@ const app = document.getElementById('app');
 
 const state = {
   user: null, // nome dell'utente collegato
+  email: null, // la sua email, se l'ha indicata
+  space: '', // nome del suo spazio: tutti i dati che vede sono di quello
+  admin: false, // gestisce il sito (vede la pagina con tutti gli spazi)
+  viewing: null, // { id, name }: lo spazio di un altro che sta guardando in sola lettura
   dishes: [],
   ingredients: [], // con l'ultimo prezzo: servono per ricette e costi
   recipeDishId: null, // piatto con la ricetta aperta in «I miei piatti»
@@ -210,7 +214,8 @@ async function api(action, { params = {}, body, post = body !== undefined, keepa
   const data = await res.json().catch(() => null);
   if (res.status === 401 && action !== 'login') {
     if (!document.getElementById('login-form')) {
-      showLogin(state.user ? 'La sessione è scaduta: accedi di nuovo.' : '', data?.needsSetup);
+      const message = data?.suspended ? data.error : state.user ? 'La sessione è scaduta: accedi di nuovo.' : '';
+      showLogin(message, data?.needsSetup);
     }
     throw new AuthError(data?.error || 'Accesso richiesto');
   }
@@ -238,15 +243,24 @@ const routes = [
   { nav: 'storico', re: /^#\/storico\/?$/, show: showHistory },
 ];
 
+// Pagine che si vedono anche senza accesso (in users.js): iscrizione e recupero della password.
+const publicRoutes = [];
+
 let lastScrollKey = null;
 
 async function route() {
+  const hash = location.hash || '#/settimana';
+  let match = null;
+  const open = publicRoutes.find((r) => (match = hash.match(r.re)));
+  if (open && (!state.user || open.always)) {
+    ++renderToken;
+    closeDialogs();
+    return open.show(match);
+  }
   if (!state.user) return showLogin();
   flushWeekSave();
   closeDialogs();
 
-  const hash = location.hash || '#/settimana';
-  let match = null;
   const current = routes.find((r) => (match = hash.match(r.re)));
   if (!current) return location.replace('#/settimana');
 
@@ -285,17 +299,36 @@ function showError(err) {
 // Accesso
 // ---------------------------------------------------------------------------
 
-function setUser(user) {
-  state.user = user;
-  document.body.classList.toggle('is-locked', !user);
-  document.getElementById('user-menu').hidden = !user;
-  document.querySelector('#user-name .user-name-text').textContent = user || '';
+// Chi è collegato, come lo descrive il server (me, login, iscrizione…); null per uscire.
+function setMe(me) {
+  state.user = me?.user ?? null;
+  state.email = me?.email ?? null;
+  state.space = me?.space ?? '';
+  state.admin = Boolean(me?.admin);
+  state.viewing = me?.viewing ?? null;
+  if (me) state.weekStartDay = me.weekStartDay;
+  document.getElementById('view-banner').hidden = !state.viewing;
+  document.getElementById('view-banner-name').textContent = state.viewing?.name ?? '';
+  document.body.classList.toggle('is-viewing', Boolean(state.viewing));
+  document.body.classList.toggle('is-locked', !me);
+  document.getElementById('user-menu').hidden = !me;
+  const link = document.getElementById('user-name');
+  link.querySelector('.user-name-text').textContent = state.user ?? '';
+  link.title = me ? `${state.user} · ${state.space}` : '';
+}
+
+// Entra con i dati restituiti da login, iscrizione o passkey e va alla pagina chiesta.
+function enter(me, hash) {
+  setMe(me);
+  lastScrollKey = null;
+  if (hash && location.hash !== hash) location.hash = hash;
+  else route();
 }
 
 // needsSetup: il sito non ha ancora utenti, il primo si crea con setup.php.
 function showLogin(message = '', needsSetup = false) {
   ++renderToken; // annulla eventuali viste ancora in caricamento
-  setUser(null);
+  setMe(null);
   closeDialogs();
   app.innerHTML = `
     <div class="login">
@@ -312,7 +345,13 @@ function showLogin(message = '', needsSetup = false) {
         <p id="login-error" class="login-error" role="alert" hidden></p>
         <button type="submit" class="btn btn-primary">Entra</button>
         ${passkeySupported() ? `<button type="button" class="btn" data-action="passkey-login">${ICONS.key}Entra con una passkey</button>` : ''}
+        <p class="login-links"><a href="#/password">Password dimenticata?</a></p>
       </form>
+      <div class="card login-card login-signup">
+        <h2>Non hai ancora un account?</h2>
+        <p>Crea il tuo spazio: è gratis, e poi puoi aggiungere le persone di casa.</p>
+        <a class="btn" href="#/iscriviti">Crea il tuo spazio</a>
+      </div>
     </div>`;
   document.title = 'Accedi · Menù della settimana';
   app.querySelector('input[name="username"]').focus();
@@ -324,13 +363,9 @@ async function submitLogin(form) {
   const error = document.getElementById('login-error');
   button.disabled = true;
   try {
-    const { user, weekStartDay } = await api('login', {
+    enter(await api('login', {
       body: { username: username.value, password: password.value, remember: remember.checked },
-    });
-    state.weekStartDay = weekStartDay;
-    setUser(user);
-    lastScrollKey = null;
-    route();
+    }));
   } catch (err) {
     error.textContent = err.message;
     error.hidden = false;
@@ -495,6 +530,12 @@ let saveTimer = null;
 let saveChain = Promise.resolve();
 
 function scheduleSave(delay = 0) {
+  // Chi gestisce il sito e sta guardando lo spazio di un altro non salva niente.
+  if (state.viewing) {
+    setSaveStatus('error');
+    toast('Sola lettura: stai guardando lo spazio di qualcun altro', 'error');
+    return;
+  }
   setSaveStatus('pending');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushWeekSave, delay);
@@ -1255,11 +1296,13 @@ app.addEventListener('keydown', (e) => {
 // Prima di tutto chiedo al server chi è collegato: se nessuno, compare il login.
 async function start() {
   try {
-    const me = await api('me');
-    state.weekStartDay = me.weekStartDay;
-    setUser(me.user);
+    setMe(await api('me'));
   } catch (err) {
-    if (!(err instanceof AuthError)) showError(err);
+    if (err instanceof AuthError) {
+      if (publicRoutes.some((r) => r.re.test(location.hash))) route(); // es. il link per la nuova password
+    } else {
+      showError(err);
+    }
     return;
   }
   route();

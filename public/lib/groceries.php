@@ -2,6 +2,8 @@
 /*
  * Spesa e costi: ingredienti, ricette dei piatti, articoli comprati e scontrini.
  * Incluso da api.php, che fornisce db(), tables(), transaction(), HttpError e le utilità.
+ * Ogni spazio ha i suoi (spaceId(), lib/spaces.php): gli id che arrivano dal browser vengono
+ * sempre cercati nello spazio di chi è collegato, così quelli degli altri danno 404.
  *
  * Come si calcolano i prezzi
  *   Ogni riga di scontrino viene ricondotta a una quantità in kg, litri o pezzi:
@@ -34,6 +36,7 @@ function grocerySchema(array $t, string $options): array
 {
     return [
         "CREATE TABLE IF NOT EXISTS {$t['ingredients']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             name VARCHAR(80) NOT NULL,
             unit VARCHAR(2) NOT NULL DEFAULT 'kg' COMMENT 'unità del prezzo: kg | l | pz',
@@ -41,7 +44,8 @@ function grocerySchema(array $t, string $options): array
             food_group VARCHAR(20) NULL COMMENT 'gruppo alimentare; NULL = riconosciuto dal nome, vuoto = nessuno',
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
-            UNIQUE KEY uq_name (name)
+            UNIQUE KEY uq_name (space_id, name),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['dish_ingredients']} (
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -58,6 +62,7 @@ function grocerySchema(array $t, string $options): array
             FOREIGN KEY (ingredient_id) REFERENCES {$t['ingredients']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['products']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             name VARCHAR(120) NOT NULL,
             brand VARCHAR(60) NOT NULL DEFAULT '',
@@ -68,23 +73,27 @@ function grocerySchema(array $t, string $options): array
             price_per_kg DECIMAL(10,3) NULL COMMENT 'per le cose pesate al banco: il peso si ricava dall''importo',
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
-            UNIQUE KEY uq_name (name),
+            UNIQUE KEY uq_name (space_id, name),
             KEY idx_ingredient (ingredient_id),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE,
             FOREIGN KEY (ingredient_id) REFERENCES {$t['ingredients']} (id) ON DELETE SET NULL
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['product_aliases']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             product_id INT UNSIGNED NOT NULL,
             store VARCHAR(80) NOT NULL,
             description VARCHAR(200) NOT NULL COMMENT 'testo come stampato sullo scontrino',
             alias_hash CHAR(40) NOT NULL COMMENT 'sha1 di negozio|descrizione normalizzati',
             PRIMARY KEY (id),
-            UNIQUE KEY uq_alias (alias_hash),
+            UNIQUE KEY uq_alias (space_id, alias_hash),
             KEY idx_description (description(100)),
             KEY idx_product (product_id),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE,
             FOREIGN KEY (product_id) REFERENCES {$t['products']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['receipts']} (
+            space_id INT UNSIGNED NOT NULL,
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             store VARCHAR(80) NOT NULL,
             address VARCHAR(200) NOT NULL DEFAULT '',
@@ -96,7 +105,8 @@ function grocerySchema(array $t, string $options): array
             source_json MEDIUMTEXT NOT NULL COMMENT 'JSON originale restituito dall''AI',
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
-            KEY idx_date (purchased_on)
+            KEY idx_date (space_id, purchased_on),
+            FOREIGN KEY (space_id) REFERENCES {$t['spaces']} (id) ON DELETE CASCADE
         ) $options",
         "CREATE TABLE IF NOT EXISTS {$t['receipt_items']} (
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -143,6 +153,9 @@ function migrateSchema(): void
         [$t['shopping'], 'category', 'VARCHAR(20) NULL AFTER text'],
         [$t['dishes'], 'food_groups', "VARCHAR(100) NULL COMMENT 'gruppi alimentari separati da virgole; NULL = riconosciuti da soli' AFTER servings"],
         [$t['ingredients'], 'food_group', "VARCHAR(20) NULL COMMENT 'gruppo alimentare; NULL = riconosciuto dal nome, vuoto = nessuno' AFTER negligible"],
+        [$t['spaces'], 'suspended_at', "DATETIME NULL COMMENT 'sospeso da chi gestisce il sito: nessuno può entrare' AFTER name"],
+        [$t['users'], 'last_seen_at', 'DATETIME NULL'],
+        [$t['users'], 'viewing_space_id', "INT UNSIGNED NULL COMMENT 'chi gestisce il sito: spazio che sta guardando in sola lettura'"],
     ];
     foreach ($columns as [$table, $column, $definition]) {
         if (!db()->query("SHOW COLUMNS FROM $table LIKE '$column'")->fetchAll()) {
@@ -199,8 +212,8 @@ function idFromInput($value): ?int
     return is_int($value) || (is_string($value) && ctype_digit($value)) ? (int) $value : null;
 }
 
-// Tutti gli acquisti collegati a un articolo, dal più recente.
-function purchases(string $where = '', array $params = []): array
+// Gli acquisti dello spazio collegati a un articolo, dal più recente. $and: altre condizioni.
+function purchases(string $and = '', array $params = []): array
 {
     $t = tables();
     $stmt = db()->prepare(
@@ -212,10 +225,10 @@ function purchases(string $where = '', array $params = []): array
          FROM {$t['receipt_items']} ri
          JOIN {$t['products']} p ON p.id = ri.product_id
          JOIN {$t['receipts']} r ON r.id = ri.receipt_id
-         $where
+         WHERE r.space_id = ? $and
          ORDER BY r.purchased_on DESC, r.purchased_time DESC, ri.id DESC"
     );
-    $stmt->execute($params);
+    $stmt->execute(array_merge([spaceId()], $params));
     return $stmt->fetchAll();
 }
 
@@ -256,13 +269,13 @@ function listIngredients(?int $onlyId = null): array
                 (SELECT COUNT(*) FROM {$t['products']} p WHERE p.ingredient_id = i.id) AS products,
                 (SELECT COUNT(DISTINCT di.dish_id) FROM {$t['dish_ingredients']} di WHERE di.ingredient_id = i.id) AS dishes
          FROM {$t['ingredients']} i
-         " . ($onlyId === null ? '' : 'WHERE i.id = ?') . '
+         WHERE i.space_id = ?" . ($onlyId === null ? '' : ' AND i.id = ?') . '
          ORDER BY i.name'
     );
-    $stmt->execute($onlyId === null ? [] : [$onlyId]);
+    $stmt->execute($onlyId === null ? [spaceId()] : [spaceId(), $onlyId]);
 
     $prices = [];
-    foreach (purchases('WHERE p.ingredient_id IS NOT NULL AND ri.ref_price_full IS NOT NULL') as $row) {
+    foreach (purchases('AND p.ingredient_id IS NOT NULL AND ri.ref_price_full IS NOT NULL') as $row) {
         $prices[(int) $row['ingredient_id']][$row['ref_unit']] ??= [
             'value' => (float) $row['ref_price_full'],
             'paid' => nullableFloat($row['ref_price_paid']),
@@ -318,8 +331,8 @@ function parseIngredient(array $input): array
 function assertIngredientNameAvailable(string $name, int $exceptId = 0): void
 {
     $t = tables();
-    $stmt = db()->prepare("SELECT name FROM {$t['ingredients']} WHERE name = ? AND id <> ? LIMIT 1");
-    $stmt->execute([$name, $exceptId]);
+    $stmt = db()->prepare("SELECT name FROM {$t['ingredients']} WHERE space_id = ? AND name = ? AND id <> ? LIMIT 1");
+    $stmt->execute([spaceId(), $name, $exceptId]);
     $clash = $stmt->fetchColumn();
     if ($clash !== false) {
         throw new HttpError(409, "Hai già un ingrediente chiamato «{$clash}»");
@@ -331,15 +344,15 @@ function createIngredient(array $input): array
     $t = tables();
     $ingredient = parseIngredient($input);
     assertIngredientNameAvailable($ingredient['name']);
-    db()->prepare("INSERT INTO {$t['ingredients']} (name, unit, negligible, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP())")
-        ->execute([$ingredient['name'], $ingredient['unit'], $ingredient['negligible'] ? 1 : 0]);
+    db()->prepare("INSERT INTO {$t['ingredients']} (space_id, name, unit, negligible, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP())")
+        ->execute([spaceId(), $ingredient['name'], $ingredient['unit'], $ingredient['negligible'] ? 1 : 0]);
     return findIngredient((int) db()->lastInsertId());
 }
 
 function updateIngredient(int $id, array $input): array
 {
     $t = tables();
-    $current = findIngredient($id);
+    $current = findIngredient($id); // 404 se non è di questo spazio
     $ingredient = parseIngredient($input);
     assertIngredientNameAvailable($ingredient['name'], $id);
     // Senza foodGroup (es. la spunta «trascurabile») il gruppo resta quello che è.
@@ -347,8 +360,8 @@ function updateIngredient(int $id, array $input): array
     if ($group !== null && $group !== '' && !in_array($group, FOOD_GROUPS, true)) {
         throw new HttpError(400, 'Gruppo alimentare non valido');
     }
-    db()->prepare("UPDATE {$t['ingredients']} SET name = ?, unit = ?, negligible = ?, food_group = ? WHERE id = ?")
-        ->execute([$ingredient['name'], $ingredient['unit'], $ingredient['negligible'] ? 1 : 0, $group, $id]);
+    db()->prepare("UPDATE {$t['ingredients']} SET name = ?, unit = ?, negligible = ?, food_group = ? WHERE id = ? AND space_id = ?")
+        ->execute([$ingredient['name'], $ingredient['unit'], $ingredient['negligible'] ? 1 : 0, $group, $id, spaceId()]);
     return findIngredient($id);
 }
 
@@ -356,8 +369,8 @@ function updateIngredient(int $id, array $input): array
 function deleteIngredient(int $id): void
 {
     $t = tables();
-    $stmt = db()->prepare("DELETE FROM {$t['ingredients']} WHERE id = ?");
-    $stmt->execute([$id]);
+    $stmt = db()->prepare("DELETE FROM {$t['ingredients']} WHERE id = ? AND space_id = ?");
+    $stmt->execute([$id, spaceId()]);
     if ($stmt->rowCount() === 0) {
         throw new HttpError(404, 'Ingrediente non trovato');
     }
@@ -371,14 +384,14 @@ function ingredientIdByName(string $name, string $unit): ?int
     if ($name === '') {
         return null;
     }
-    $stmt = db()->prepare("SELECT id FROM {$t['ingredients']} WHERE name = ? LIMIT 1");
-    $stmt->execute([$name]);
+    $stmt = db()->prepare("SELECT id FROM {$t['ingredients']} WHERE space_id = ? AND name = ? LIMIT 1");
+    $stmt->execute([spaceId(), $name]);
     $id = $stmt->fetchColumn();
     if ($id !== false) {
         return (int) $id;
     }
-    db()->prepare("INSERT INTO {$t['ingredients']} (name, unit, negligible, created_at) VALUES (?, ?, 0, UTC_TIMESTAMP())")
-        ->execute([$name, in_array($unit, PRICE_UNITS, true) ? $unit : 'kg']);
+    db()->prepare("INSERT INTO {$t['ingredients']} (space_id, name, unit, negligible, created_at) VALUES (?, ?, ?, 0, UTC_TIMESTAMP())")
+        ->execute([spaceId(), $name, in_array($unit, PRICE_UNITS, true) ? $unit : 'kg']);
     return (int) db()->lastInsertId();
 }
 
@@ -422,7 +435,7 @@ function attachRecipes(array $dishes): array
 function saveRecipe(int $dishId, array $input): array
 {
     $t = tables();
-    findDish($dishId);
+    findDish($dishId); // 404 se il piatto non è di questo spazio
     $servings = max(1, min(50, (int) ($input['servings'] ?? 4)));
 
     $lines = [];
@@ -445,9 +458,10 @@ function saveRecipe(int $dishId, array $input): array
     }
 
     transaction(function (PDO $pdo) use ($t, $dishId, $servings, $lines) {
-        $pdo->prepare("UPDATE {$t['dishes']} SET servings = ? WHERE id = ?")->execute([$servings, $dishId]);
+        $pdo->prepare("UPDATE {$t['dishes']} SET servings = ? WHERE id = ? AND space_id = ?")->execute([$servings, $dishId, spaceId()]);
         $pdo->prepare("DELETE FROM {$t['dish_ingredients']} WHERE dish_id = ?")->execute([$dishId]);
-        $exists = $pdo->prepare("SELECT id FROM {$t['ingredients']} WHERE id = ?");
+        // Solo ingredienti di questo spazio: un id di un altro spazio vale come ingrediente per nome.
+        $exists = $pdo->prepare("SELECT id FROM {$t['ingredients']} WHERE id = ? AND space_id = ?");
         $insert = $pdo->prepare(
             "INSERT INTO {$t['dish_ingredients']} (dish_id, ingredient_id, position, quantity, unit, negligible)
              VALUES (?, ?, ?, ?, ?, ?)"
@@ -456,7 +470,7 @@ function saveRecipe(int $dishId, array $input): array
         foreach (array_slice($lines, 0, 60) as $line) {
             $ingredientId = null;
             if ($line['ingredientId'] !== null) {
-                $exists->execute([$line['ingredientId']]);
+                $exists->execute([$line['ingredientId'], spaceId()]);
                 $ingredientId = $exists->fetchColumn() === false ? null : $line['ingredientId'];
             }
             $ingredientId = $ingredientId ?? ingredientIdByName($line['ingredientName'], AMOUNT_UNITS[$line['unit']][0]);
@@ -484,13 +498,13 @@ function listProducts(?int $onlyId = null): array
                 (SELECT COUNT(*) FROM {$t['receipt_items']} ri WHERE ri.product_id = p.id) AS purchases
          FROM {$t['products']} p
          LEFT JOIN {$t['ingredients']} i ON i.id = p.ingredient_id
-         " . ($onlyId === null ? '' : 'WHERE p.id = ?') . '
+         WHERE p.space_id = ?" . ($onlyId === null ? '' : ' AND p.id = ?') . '
          ORDER BY p.name'
     );
-    $stmt->execute($onlyId === null ? [] : [$onlyId]);
+    $stmt->execute($onlyId === null ? [spaceId()] : [spaceId(), $onlyId]);
 
     $last = [];
-    foreach (purchases($onlyId === null ? '' : 'WHERE ri.product_id = ?', $onlyId === null ? [] : [$onlyId]) as $row) {
+    foreach (purchases($onlyId === null ? '' : 'AND ri.product_id = ?', $onlyId === null ? [] : [$onlyId]) as $row) {
         $last[(int) $row['product_id']] ??= purchaseInfo($row);
     }
 
@@ -516,11 +530,11 @@ function listProducts(?int $onlyId = null): array
 function getProduct(int $id): array
 {
     $t = tables();
-    $list = listProducts($id);
+    $list = listProducts($id); // vuoto se non è di questo spazio
     if (!$list) {
         throw new HttpError(404, 'Articolo non trovato');
     }
-    $history = array_map('purchaseInfo', purchases('WHERE ri.product_id = ?', [$id]));
+    $history = array_map('purchaseInfo', purchases('AND ri.product_id = ?', [$id]));
     $stmt = db()->prepare("SELECT store, description FROM {$t['product_aliases']} WHERE product_id = ? ORDER BY store, description");
     $stmt->execute([$id]);
     return $list[0] + ['history' => $history, 'aliases' => $stmt->fetchAll()];
@@ -534,8 +548,8 @@ function updateProduct(int $id, array $input): array
     if ($name === '') {
         throw new HttpError(400, "Il nome dell'articolo è obbligatorio");
     }
-    $stmt = db()->prepare("SELECT name FROM {$t['products']} WHERE name = ? AND id <> ? LIMIT 1");
-    $stmt->execute([$name, $id]);
+    $stmt = db()->prepare("SELECT name FROM {$t['products']} WHERE space_id = ? AND name = ? AND id <> ? LIMIT 1");
+    $stmt->execute([spaceId(), $name, $id]);
     $clash = $stmt->fetchColumn();
     if ($clash !== false) {
         throw new HttpError(409, "Hai già un articolo chiamato «{$clash}»: per riunirli usa «Unisci»");
@@ -562,7 +576,7 @@ function updateProduct(int $id, array $input): array
         $pdo->prepare(
             "UPDATE {$t['products']}
              SET name = ?, brand = ?, category = ?, ingredient_id = ?, package_size = ?, package_unit = ?, price_per_kg = ?
-             WHERE id = ?"
+             WHERE id = ? AND space_id = ?"
         )->execute([
             $name,
             cleanLine($input['brand'] ?? null, 60),
@@ -572,6 +586,7 @@ function updateProduct(int $id, array $input): array
             $hasPackage ? $unit : null,
             $perKg === null ? null : round($perKg, 3),
             $id,
+            spaceId(),
         ]);
         applyProductCard($id, $repriceAll);
         if ($ingredientId !== null) {
@@ -583,14 +598,18 @@ function updateProduct(int $id, array $input): array
 
 // Applica la scheda dell'articolo ai suoi acquisti in cui lo scontrino non riporta né il peso
 // né il formato: il prezzo al kg (cose pesate al banco) o il formato della confezione.
+// Le funzioni apply... ricevono solo articoli e righe già cercati in questo spazio.
 function applyProductCard(int $productId, bool $repriceAll = false): void
 {
     $t = tables();
-    $stmt = db()->prepare("SELECT package_size, package_unit, price_per_kg FROM {$t['products']} WHERE id = ?");
-    $stmt->execute([$productId]);
+    $stmt = db()->prepare("SELECT package_size, package_unit, price_per_kg FROM {$t['products']} WHERE id = ? AND space_id = ?");
+    $stmt->execute([$productId, spaceId()]);
     $product = $stmt->fetch();
-    $perKg = $product ? nullableFloat($product['price_per_kg']) : null;
-    $size = $product ? nullableFloat($product['package_size']) : null;
+    if (!$product) {
+        return;
+    }
+    $perKg = nullableFloat($product['price_per_kg']);
+    $size = nullableFloat($product['package_size']);
     applyWeightToItems('product_id = ?', [$productId], $perKg, $repriceAll);
     applyPackageToItems('product_id = ?', [$productId], $size, $size === null ? null : $product['package_unit']);
 }
@@ -688,15 +707,15 @@ function applyPackageToItems(string $where, array $params, ?float $size, ?string
 function syncIngredientUnit(int $ingredientId): void
 {
     $t = tables();
-    $stmt = db()->prepare("SELECT unit FROM {$t['ingredients']} WHERE id = ?");
-    $stmt->execute([$ingredientId]);
+    $stmt = db()->prepare("SELECT unit FROM {$t['ingredients']} WHERE id = ? AND space_id = ?");
+    $stmt->execute([$ingredientId, spaceId()]);
     $unit = $stmt->fetchColumn();
     $units = array_unique(array_column(
-        purchases('WHERE p.ingredient_id = ? AND ri.ref_price_full IS NOT NULL', [$ingredientId]),
+        purchases('AND p.ingredient_id = ? AND ri.ref_price_full IS NOT NULL', [$ingredientId]),
         'ref_unit'
     ));
     if ($unit !== false && $units && !in_array($unit, $units, true)) {
-        db()->prepare("UPDATE {$t['ingredients']} SET unit = ? WHERE id = ?")->execute([reset($units), $ingredientId]);
+        db()->prepare("UPDATE {$t['ingredients']} SET unit = ? WHERE id = ? AND space_id = ?")->execute([reset($units), $ingredientId, spaceId()]);
     }
 }
 
@@ -708,7 +727,7 @@ function mergeProduct(int $id, array $input): array
     if ($intoId === null || $intoId === $id) {
         throw new HttpError(400, "Scegli un altro articolo in cui unire questo");
     }
-    $source = getProduct($id);
+    $source = getProduct($id); // entrambi di questo spazio, altrimenti 404
     $target = getProduct($intoId);
     transaction(function (PDO $pdo) use ($t, $id, $intoId, $source, $target) {
         $pdo->prepare("UPDATE {$t['receipt_items']} SET product_id = ? WHERE product_id = ?")->execute([$intoId, $id]);
@@ -732,11 +751,12 @@ function mergeProduct(int $id, array $input): array
 function deleteProduct(int $id): void
 {
     $t = tables();
+    getProduct($id); // 404 se non è di questo spazio
     transaction(function (PDO $pdo) use ($t, $id) {
         applyWeightToItems('product_id = ?', [$id], null);
         applyPackageToItems('product_id = ?', [$id], null, null);
-        $stmt = $pdo->prepare("DELETE FROM {$t['products']} WHERE id = ?");
-        $stmt->execute([$id]);
+        $stmt = $pdo->prepare("DELETE FROM {$t['products']} WHERE id = ? AND space_id = ?");
+        $stmt->execute([$id, spaceId()]);
         if ($stmt->rowCount() === 0) {
             throw new HttpError(404, 'Articolo non trovato');
         }
@@ -914,19 +934,28 @@ function matchLines(string $store, array $lines): array
     $t = tables();
     $products = [];
     $byName = [];
-    $sql = "SELECT p.id, p.name, i.name AS ingredient FROM {$t['products']} p LEFT JOIN {$t['ingredients']} i ON i.id = p.ingredient_id";
-    foreach (db()->query($sql)->fetchAll() as $row) {
+    $space = [spaceId()];
+    $stmt = db()->prepare(
+        "SELECT p.id, p.name, i.name AS ingredient FROM {$t['products']} p
+         LEFT JOIN {$t['ingredients']} i ON i.id = p.ingredient_id WHERE p.space_id = ?"
+    );
+    $stmt->execute($space);
+    foreach ($stmt->fetchAll() as $row) {
         $products[(int) $row['id']] = $row;
         $byName[fold($row['name'])] = (int) $row['id'];
     }
     $byHash = [];
     $byDescription = [];
-    foreach (db()->query("SELECT product_id, description, alias_hash FROM {$t['product_aliases']}")->fetchAll() as $row) {
+    $stmt = db()->prepare("SELECT product_id, description, alias_hash FROM {$t['product_aliases']} WHERE space_id = ?");
+    $stmt->execute($space);
+    foreach ($stmt->fetchAll() as $row) {
         $byHash[$row['alias_hash']] = (int) $row['product_id'];
         $byDescription[fold($row['description'])] ??= (int) $row['product_id'];
     }
     $ingredients = [];
-    foreach (db()->query("SELECT name FROM {$t['ingredients']}")->fetchAll(PDO::FETCH_COLUMN) as $name) {
+    $stmt = db()->prepare("SELECT name FROM {$t['ingredients']} WHERE space_id = ?");
+    $stmt->execute($space);
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $name) {
         $ingredients[fold($name)] = $name;
     }
 
@@ -962,8 +991,10 @@ function findDuplicateReceipt(array $receipt): ?string
         return null;
     }
     $t = tables();
-    $stmt = db()->prepare("SELECT id FROM {$t['receipts']} WHERE store = ? AND purchased_on = ? AND total <=> ? LIMIT 1");
-    $stmt->execute([$receipt['store'], $receipt['date'], $receipt['total']]);
+    $stmt = db()->prepare(
+        "SELECT id FROM {$t['receipts']} WHERE space_id = ? AND store = ? AND purchased_on = ? AND total <=> ? LIMIT 1"
+    );
+    $stmt->execute([spaceId(), $receipt['store'], $receipt['date'], $receipt['total']]);
     $id = $stmt->fetchColumn();
     return $id === false ? null : (string) $id;
 }
@@ -990,8 +1021,8 @@ function resolveProduct(string $name, string $ingredientName, array $line): ?int
         return null;
     }
     $ingredientId = ingredientIdByName($ingredientName, $line['refUnit'] ?? 'kg');
-    $stmt = db()->prepare("SELECT id FROM {$t['products']} WHERE name = ? LIMIT 1");
-    $stmt->execute([$name]);
+    $stmt = db()->prepare("SELECT id FROM {$t['products']} WHERE space_id = ? AND name = ? LIMIT 1");
+    $stmt->execute([spaceId(), $name]);
     $id = $stmt->fetchColumn();
     if ($id !== false) {
         db()->prepare("UPDATE {$t['products']} SET ingredient_id = ? WHERE id = ?")->execute([$ingredientId, $id]);
@@ -999,9 +1030,10 @@ function resolveProduct(string $name, string $ingredientName, array $line): ?int
     }
     $hasPackage = ($line['packageSize'] ?? null) !== null && empty($line['packageEstimated']);
     db()->prepare(
-        "INSERT INTO {$t['products']} (name, brand, category, ingredient_id, package_size, package_unit, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())"
+        "INSERT INTO {$t['products']} (space_id, name, brand, category, ingredient_id, package_size, package_unit, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())"
     )->execute([
+        spaceId(),
         $name,
         $line['brand'] ?? '',
         $line['category'] ?? 'altro',
@@ -1018,13 +1050,13 @@ function rememberAlias(string $store, string $description, ?int $productId): voi
     $t = tables();
     $hash = aliasHash($store, $description);
     if ($productId === null) {
-        db()->prepare("DELETE FROM {$t['product_aliases']} WHERE alias_hash = ?")->execute([$hash]);
+        db()->prepare("DELETE FROM {$t['product_aliases']} WHERE space_id = ? AND alias_hash = ?")->execute([spaceId(), $hash]);
         return;
     }
     db()->prepare(
-        "INSERT INTO {$t['product_aliases']} (product_id, store, description, alias_hash) VALUES (?, ?, ?, ?)
+        "INSERT INTO {$t['product_aliases']} (space_id, product_id, store, description, alias_hash) VALUES (?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE product_id = ?"
-    )->execute([$productId, $store, $description, $hash, $productId]);
+    )->execute([spaceId(), $productId, $store, $description, $hash, $productId]);
 }
 
 // Salva lo scontrino. $input: { receipt: JSON dell'AI (eventualmente corretto),
@@ -1045,9 +1077,10 @@ function saveReceipt(array $input): array
     $receiptId = 0;
     transaction(function (PDO $pdo) use ($t, $receipt, $source, $choices, &$receiptId) {
         $pdo->prepare(
-            "INSERT INTO {$t['receipts']} (store, address, purchased_on, purchased_time, total, extra_discount, warnings, source_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())"
+            "INSERT INTO {$t['receipts']} (space_id, store, address, purchased_on, purchased_time, total, extra_discount, warnings, source_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())"
         )->execute([
+            spaceId(),
             $receipt['store'],
             $receipt['address'],
             $receipt['date'],
@@ -1096,10 +1129,10 @@ function saveReceipt(array $input): array
 function refreshProducts(array $productIds): void
 {
     $t = tables();
-    $ingredient = db()->prepare("SELECT ingredient_id FROM {$t['products']} WHERE id = ?");
+    $ingredient = db()->prepare("SELECT ingredient_id FROM {$t['products']} WHERE id = ? AND space_id = ?");
     foreach ($productIds as $productId) {
         applyProductCard((int) $productId);
-        $ingredient->execute([(int) $productId]);
+        $ingredient->execute([(int) $productId, spaceId()]);
         $ingredientId = $ingredient->fetchColumn();
         if ($ingredientId !== false && $ingredientId !== null) {
             syncIngredientUnit((int) $ingredientId);
@@ -1110,15 +1143,18 @@ function refreshProducts(array $productIds): void
 function listReceipts(): array
 {
     $t = tables();
-    $rows = db()->query(
+    $stmt = db()->prepare(
         "SELECT r.id, r.store, r.purchased_on, r.purchased_time, r.total, r.extra_discount,
                 (SELECT COUNT(*) FROM {$t['receipt_items']} ri WHERE ri.receipt_id = r.id) AS items,
                 (SELECT COUNT(*) FROM {$t['receipt_items']} ri WHERE ri.receipt_id = r.id AND ri.product_id IS NULL) AS unlinked,
                 (SELECT COALESCE(SUM(ri.price_paid), 0) FROM {$t['receipt_items']} ri WHERE ri.receipt_id = r.id) AS paid,
                 (SELECT COALESCE(SUM(ri.discount), 0) FROM {$t['receipt_items']} ri WHERE ri.receipt_id = r.id) AS discounts
          FROM {$t['receipts']} r
+         WHERE r.space_id = ?
          ORDER BY r.purchased_on DESC, r.purchased_time DESC, r.id DESC"
-    )->fetchAll();
+    );
+    $stmt->execute([spaceId()]);
+    $rows = $stmt->fetchAll();
     return array_map(function (array $row) {
         return [
             'id' => (string) $row['id'],
@@ -1140,9 +1176,9 @@ function getReceipt(int $id): array
     $t = tables();
     $stmt = db()->prepare(
         "SELECT id, store, address, purchased_on, purchased_time, total, extra_discount, warnings
-         FROM {$t['receipts']} WHERE id = ?"
+         FROM {$t['receipts']} WHERE id = ? AND space_id = ?"
     );
-    $stmt->execute([$id]);
+    $stmt->execute([$id, spaceId()]);
     $row = $stmt->fetch();
     if (!$row) {
         throw new HttpError(404, 'Scontrino non trovato');
@@ -1202,7 +1238,7 @@ function getReceipt(int $id): array
 function relinkReceipt(int $id, array $input): array
 {
     $t = tables();
-    $receipt = getReceipt($id);
+    $receipt = getReceipt($id); // 404 se non è di questo spazio; si toccano solo le sue righe
     $items = [];
     foreach ($receipt['lines'] as $line) {
         $items[$line['id']] = $line;
@@ -1243,8 +1279,8 @@ function relinkReceipt(int $id, array $input): array
 function deleteReceipt(int $id): void
 {
     $t = tables();
-    $stmt = db()->prepare("DELETE FROM {$t['receipts']} WHERE id = ?");
-    $stmt->execute([$id]);
+    $stmt = db()->prepare("DELETE FROM {$t['receipts']} WHERE id = ? AND space_id = ?");
+    $stmt->execute([$id, spaceId()]);
     if ($stmt->rowCount() === 0) {
         throw new HttpError(404, 'Scontrino non trovato');
     }

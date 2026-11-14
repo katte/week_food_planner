@@ -5,6 +5,11 @@ Deploy del sito sul server via FTP.
 Carica il contenuto di `public/` (ricorsivamente) nella cartella del server indicata
 in deploy_config.ini (chiave 'remote_dir' della sezione [ftp], default /htdocs/wfp/).
 
+Per una seconda copia del sito (es. una di prova, con un altro database) basta un altro
+file INI con un altro 'remote_dir' e 'site_config': il file locale, relativo all'INI, che
+sul server diventa config.php al posto di public/config.php (e public/users.php non viene
+caricato). Lo stato dei caricamenti è tenuto per percorso remoto: le copie non si disturbano.
+
 Non servono dipendenze esterne: usa 'ftplib' della libreria standard.
 
 Le credenziali FTP stanno in un file INI esterno (default: deploy_config.ini),
@@ -15,6 +20,7 @@ Uso:
     python deploy.py --dry-run        # mostra cosa verrebbe caricato senza caricare nulla
     python deploy.py --force          # ricarica tutto, ignorando lo stato precedente
     python deploy.py -c altro.ini     # usa un file di configurazione diverso
+    python deploy.py -c deploy_test.ini  # es. la copia di prova, con il suo config.php
 """
 
 import argparse
@@ -62,6 +68,10 @@ INCLUDE = [
     "*.svg",
     "*.txt",
 ]
+
+# File che appartengono a una sola copia del sito: con 'site_config' non vengono caricati
+# (config.php arriva da 'site_config', il vecchio users.php non serve).
+SITE_ONLY = {"config.php", "users.php"}
 # ============================================================================
 
 
@@ -122,12 +132,28 @@ def ensure_remote_dir(ftp: ftplib.FTP, remote_dir: str) -> None:
                     raise exc
 
 
-def upload_dir(ftp, local_dir, remote_dir, state, dry_run, force, stats):
-    """Carica ricorsivamente i file nuovi/modificati di local_dir dentro remote_dir.
+def upload_file(ftp, local_path, remote_path, state, dry_run, force, stats):
+    """Carica un file se è nuovo o modificato rispetto all'ultimo caricamento.
 
     'state' mappa remote_path -> hash dell'ultimo caricamento e viene aggiornata
     solo dopo un upload andato a buon fine. 'stats' accumula i conteggi.
     """
+    digest = file_hash(local_path)
+    if not force and state.get(remote_path) == digest:
+        stats["invariati"] += 1
+        print(f"  [=]     {local_path}")
+        return
+    print(f"  [put]   {local_path}  ->  {remote_path}")
+    if not dry_run:
+        with open(local_path, "rb") as fh:
+            ftp.storbinary(f"STOR {remote_path}", fh)
+        state[remote_path] = digest  # registra solo dopo l'upload riuscito
+    stats["caricati"] += 1
+
+
+def upload_dir(ftp, local_dir, remote_dir, state, dry_run, force, stats, skip=frozenset()):
+    """Carica ricorsivamente i file nuovi/modificati di local_dir dentro remote_dir.
+    'skip': nomi da non caricare in questa cartella (non nelle sottocartelle)."""
     if not dry_run:
         ensure_remote_dir(ftp, remote_dir)
 
@@ -137,18 +163,8 @@ def upload_dir(ftp, local_dir, remote_dir, state, dry_run, force, stats):
 
         if os.path.isdir(local_path):
             upload_dir(ftp, local_path, remote_path, state, dry_run, force, stats)
-        elif is_included(entry):
-            digest = file_hash(local_path)
-            if not force and state.get(remote_path) == digest:
-                stats["invariati"] += 1
-                print(f"  [=]     {local_path}")
-                continue
-            print(f"  [put]   {local_path}  ->  {remote_path}")
-            if not dry_run:
-                with open(local_path, "rb") as fh:
-                    ftp.storbinary(f"STOR {remote_path}", fh)
-                state[remote_path] = digest  # registra solo dopo l'upload riuscito
-            stats["caricati"] += 1
+        elif is_included(entry) and entry not in skip:
+            upload_file(ftp, local_path, remote_path, state, dry_run, force, stats)
         else:
             stats["esclusi"] += 1
             print(f"  [skip]  {local_path}")
@@ -184,12 +200,29 @@ def load_config(path: str) -> dict:
     }
 
 
-def read_remote_dir(path: str) -> str:
-    """Cartella remota da 'remote_dir' in [ftp], se il file c'è (serve anche in dry-run)."""
+def read_ini_option(path: str, key: str) -> str:
+    """Valore di una chiave della sezione [ftp], se il file c'è (serve anche in dry-run)."""
     parser = configparser.ConfigParser()
     if os.path.isfile(path):
         parser.read(path, encoding="utf-8")
-    return parser.get("ftp", "remote_dir", fallback="").strip() or DEFAULT_REMOTE_DIR
+    return parser.get("ftp", key, fallback="").strip()
+
+
+def read_remote_dir(path: str) -> str:
+    """Cartella remota da 'remote_dir' in [ftp]."""
+    return read_ini_option(path, "remote_dir") or DEFAULT_REMOTE_DIR
+
+
+def read_site_config(path: str):
+    """File locale che diventa config.php sul server ('site_config' in [ftp], relativo
+    al file INI), oppure None: in quel caso si carica public/config.php."""
+    name = read_ini_option(path, "site_config")
+    if not name:
+        return None
+    local = os.path.join(os.path.dirname(os.path.abspath(path)), name)
+    if not os.path.isfile(local):
+        sys.exit(f"ERRORE: 'site_config' indica un file che non esiste: {local}")
+    return local
 
 
 def connect(cfg: dict) -> ftplib.FTP:
@@ -237,6 +270,7 @@ def main() -> None:
     state = {} if force else load_manifest(state_path)
     stats = {"caricati": 0, "invariati": 0, "esclusi": 0}
     remote_base = read_remote_dir(config_path)
+    site_config = read_site_config(config_path)
 
     # In dry-run non serve il server (ne' le credenziali): [put]/[=]/[skip] dipende solo dai file locali.
     ftp = None if dry_run else connect(load_config(config_path))
@@ -248,7 +282,12 @@ def main() -> None:
             local_dir = os.path.join(script_dir, d)
             remote_dir = remote_join(remote_base, remote_sub)
             print(f"\n== {d}  ->  {remote_dir} ==")
-            upload_dir(ftp, local_dir, remote_dir, state, dry_run, force, stats)
+            skip = SITE_ONLY if site_config and remote_sub == "" else frozenset()
+            upload_dir(ftp, local_dir, remote_dir, state, dry_run, force, stats, skip)
+
+        if site_config:
+            print("\n== config.php di questa copia ==")
+            upload_file(ftp, site_config, remote_join(remote_base, "config.php"), state, dry_run, force, stats)
     finally:
         if ftp is not None:
             try:
